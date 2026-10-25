@@ -1,0 +1,125 @@
+query GetMyProfile
+@auth(level: USER) {
+  userProfile(key: { uid_expr: "auth.uid" }) {
+    uid
+    institutionId
+    email
+    displayName
+  }
+}
+
+query GetSchedulingReferenceData
+@auth(expr: "auth.uid != nil && auth.token.institutionId != nil && auth.token.role in ['SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'TIMETABLE_INCHARGE', 'FACULTY', 'ACADEMIC_APPROVER']") {
+  academicTerms(
+    where: { institutionId: { eq_expr: "auth.token.institutionId" } }
+    orderBy: [{ startsOn: DESC }]
+  ) {
+    id
+    name
+    academicYear
+    startsOn
+    endsOn
+    workingDays
+  }
+  departments(
+    where: { institutionId: { eq_expr: "auth.token.institutionId" } }
+    orderBy: [{ name: ASC }]
+  ) {
+    id
+    code
+    name
+  }
+  faculty(
+    where: {
+      institutionId: { eq_expr: "auth.token.institutionId" }
+      isActive: { eq: true }
+    }
+    orderBy: [{ fullName: ASC }]
+  ) {
+    id
+    employeeId
+    fullName
+    departmentId
+    maxWeeklyPeriods
+  }
+  subjects(
+    where: { institutionId: { eq_expr: "auth.token.institutionId" } }
+    orderBy: [{ name: ASC }]
+  ) {
+    id
+    code
+    name
+    departmentId
+    roomType
+    requiredEquipment
+  }
+  sections(
+    where: { institutionId: { eq_expr: "auth.token.institutionId" } }
+    orderBy: [{ code: ASC }]
+  ) {
+    id
+    code
+    semester
+    academicYear
+    studentCount
+    departmentId
+    academicTermId
+  }
+  rooms(
+    where: { institutionId: { eq_expr: "auth.token.institutionId" } }
+    orderBy: [{ name: ASC }]
+  ) {
+    id
+    name
+    roomType
+    capacity
+    equipment
+  }
+  timeSlots(
+    where: {
+      institutionId: { eq_expr: "auth.token.institutionId" }
+      isTeachingPeriod: { eq: true }
+    }
+    orderBy: [{ dayOfWeek: ASC }, { periodNumber: ASC }]
+  ) {
+    id
+    dayOfWeek
+    periodNumber
+    startsAt
+    endsAt
+  }
+}
+
+query GetMyPublishedTimetable
+@auth(expr: "auth.uid != nil && auth.token.role == 'STUDENT_VIEWER' && auth.token.institutionId != nil && auth.token.sectionId != nil") {
+  timetableVersions(
+    where: {
+      institutionId: { eq_expr: "auth.token.institutionId" }
+      sectionId: { eq_expr: "auth.token.sectionId" }
+      status: { eq: PUBLISHED }
+    }
+    orderBy: [{ versionNumber: DESC }]
+    limit: 1
+  ) {
+    id
+    versionNumber
+    publishedAt
+    timetableEntries_on_timetableVersion(orderBy: [{ dayOfWeek: ASC }, { periodNumber: ASC }]) {
+      id
+      dayOfWeek
+      periodNumber
+      durationInPeriods
+      sessionType
+      subject {
+        code
+        name
+      }
+      faculty {
+        fullName
+      }
+      room {
+        name
+      }
+    }
+  }
+}

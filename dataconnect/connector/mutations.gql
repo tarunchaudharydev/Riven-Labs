@@ -1,0 +1,111 @@
+mutation CreateDepartment($code: String!, $name: String!)
+@auth(expr: "auth.uid != nil && auth.token.institutionId != nil && auth.token.role in ['SUPER_ADMIN', 'DEPARTMENT_ADMIN'] && vars.code.size() >= 2 && vars.code.size() <= 24 && vars.name.size() > 0 && vars.name.size() <= 120") {
+  department_insert(
+    data: {
+      institutionId_expr: "auth.token.institutionId"
+      code: $code
+      name: $name
+    }
+  )
+}
+
+mutation CreateSubject(
+  $departmentId: UUID!
+  $code: String!
+  $name: String!
+  $roomType: RoomType!
+  $requiredEquipment: [String!]!
+)
+@auth(expr: "auth.uid != nil && auth.token.institutionId != nil && auth.token.role in ['SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'TIMETABLE_INCHARGE'] && vars.code.size() >= 2 && vars.code.size() <= 24 && vars.name.size() > 0 && vars.name.size() <= 120 && vars.requiredEquipment.size() <= 30 && vars.requiredEquipment.all(item, item.size() > 0 && item.size() <= 80)")
+@transaction {
+  query @redact {
+    department(id: $departmentId) @check(expr: "this != null", message: "Department not found") {
+      institutionId @check(expr: "this == auth.token.institutionId", message: "Department is outside your institution")
+    }
+  }
+  subject_insert(
+    data: {
+      institutionId_expr: "auth.token.institutionId"
+      departmentId: $departmentId
+      code: $code
+      name: $name
+      roomType: $roomType
+      requiredEquipment: $requiredEquipment
+    }
+  )
+}
+
+mutation CreateTeachingRequirement(
+  $sectionId: UUID!
+  $subjectId: UUID!
+  $weeklyLecturePeriods: Int!
+  $weeklyLaboratoryPeriods: Int!
+  $laboratoryBlockLength: Int!
+)
+@auth(expr: "auth.uid != nil && auth.token.institutionId != nil && auth.token.role in ['SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'TIMETABLE_INCHARGE'] && vars.weeklyLecturePeriods >= 0 && vars.weeklyLecturePeriods <= 40 && vars.weeklyLaboratoryPeriods >= 0 && vars.weeklyLaboratoryPeriods <= 40 && vars.laboratoryBlockLength >= 1 && vars.laboratoryBlockLength <= 8")
+@transaction {
+  query @redact {
+    section(id: $sectionId) @check(expr: "this != null", message: "Section not found") {
+      institutionId @check(expr: "this == auth.token.institutionId", message: "Section is outside your institution")
+    }
+    subject(id: $subjectId) @check(expr: "this != null", message: "Subject not found") {
+      institutionId @check(expr: "this == auth.token.institutionId", message: "Subject is outside your institution")
+    }
+  }
+  teachingRequirement_insert(
+    data: {
+      institutionId_expr: "auth.token.institutionId"
+      sectionId: $sectionId
+      subjectId: $subjectId
+      weeklyLecturePeriods: $weeklyLecturePeriods
+      weeklyLaboratoryPeriods: $weeklyLaboratoryPeriods
+      laboratoryBlockLength: $laboratoryBlockLength
+    }
+  )
+}
+
+mutation CreateTimetableDraft($sectionId: UUID!, $versionNumber: Int!)
+@auth(expr: "auth.uid != nil && auth.token.institutionId != nil && auth.token.role in ['SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'TIMETABLE_INCHARGE'] && vars.versionNumber >= 1 && vars.versionNumber <= 100")
+@transaction {
+  query @redact {
+    section(id: $sectionId) @check(expr: "this != null", message: "Section not found") {
+      institutionId @check(expr: "this == auth.token.institutionId", message: "Section is outside your institution")
+    }
+  }
+  timetableVersion_insert(
+    data: {
+      institutionId_expr: "auth.token.institutionId"
+      sectionId: $sectionId
+      versionNumber: $versionNumber
+      status: DRAFT
+      createdByUid_expr: "auth.uid"
+    }
+  )
+}
+
+mutation RecordFacultyAbsence(
+  $facultyId: UUID!
+  $startsOn: Date!
+  $endsOn: Date!
+  $reason: String
+)
+@auth(expr: "auth.uid != nil && auth.token.institutionId != nil && auth.token.role in ['SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'TIMETABLE_INCHARGE', 'FACULTY'] && vars.startsOn <= vars.endsOn && (!has(vars.reason) || vars.reason == null || vars.reason.size() <= 500)")
+@transaction {
+  query @redact {
+    faculty(id: $facultyId) @check(expr: "this != null", message: "Faculty member not found") {
+      institutionId @check(expr: "this == auth.token.institutionId", message: "Faculty member is outside your institution")
+      linkedUserUid @check(expr: "this == auth.uid || auth.token.role in ['SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'TIMETABLE_INCHARGE']", message: "Faculty may only report their own absence")
+    }
+  }
+  facultyAbsence_insert(
+    data: {
+      institutionId_expr: "auth.token.institutionId"
+      facultyId: $facultyId
+      startsOn: $startsOn
+      endsOn: $endsOn
+      reason: $reason
+      status: REPORTED
+      createdByUid_expr: "auth.uid"
+    }
+  )
+}
