@@ -1,37 +1,64 @@
-# Riven Labs Timetable
+# Riven Labs · Smart Timetable
 
-This repository is the starting point for the smart timetable and faculty substitution platform. The checked-in app was a Next.js and FastAPI starter and did not contain a Supabase integration. This change establishes Firebase as the persistence and authentication platform using Firebase SQL Connect with Cloud SQL for PostgreSQL, preserving the relational data model and vector-ready policy storage described in the project brief.
+Riven Labs is an AI-assisted timetable and faculty coverage workspace. The web client signs users in with Firebase Authentication, sends Firebase ID tokens to the Spring Boot API, and never accesses the Realtime Database directly. The API verifies token claims, scopes records to the user's institution, and uses Firebase Admin SDK for tenant data. The Python AI service is private to the backend.
+
+Timetable creation is deterministic: Gemini may interpret a natural-language request into catalog IDs for a user to review, while Google OR-Tools CP-SAT creates the candidate schedule. The service independently validates each result. The backend only stores valid results as drafts; a separate approver and authorized publisher move a version through the lifecycle.
 
 ## Firebase project
 
-The Firebase project is `timetable-5230e`. The SQL Connect service is configured as `timetable` in `asia-south1`, with a PostgreSQL database named `timetable` and Cloud SQL instance ID `timetable-sql`. SQL Connect services and their Cloud SQL instances must use the same region. If your Firebase project already has a SQL Connect service or Cloud SQL instance, update `dataconnect/dataconnect.yaml` to match those existing resource names and region before provisioning or deploying.
+The configured project is `timetable-5230e`. This repo uses Firebase Authentication and **Firebase Realtime Database**. The RTDB URL is region-specific, so copy its exact URL from Firebase Console rather than deriving it from the project ID. The console should have Email/Password sign-in enabled. Create a Realtime Database instance before starting the API.
 
-The root `.firebaserc` selects this project for Firebase CLI commands. Do not commit Firebase service-account keys or other secrets; none are needed for the web client configuration.
+`database.rules.json` denies all client reads and writes. The Java Admin SDK bypasses database rules, so the API verifies each Firebase ID token, requires trusted `institutionId` and `role` custom claims, scopes every data path beneath that institution, and gates edits and lifecycle operations by role. Never copy service-account credentials or `AI_SERVICE_API_KEY` into the browser app.
 
-## Set up SQL Connect
+Create a local env file from `.env.example` and provide `FIREBASE_DATABASE_URL`. The Spring API uses Application Default Credentials; for local development, run `gcloud auth application-default login` before starting it. For a deployed service, assign a service identity with access to the project and its Realtime Database. If you need a local service-account file, set `GOOGLE_APPLICATION_CREDENTIALS` in your shell to a file kept outside the repository; the example env file intentionally leaves this optional variable unset.
 
-Install the Firebase CLI, sign in, then run these commands from the repository root:
+Create Firebase Auth users through a trusted admin workflow, then set custom claims from a trusted Admin SDK environment. For example:
 
-```sh
-firebase login
-firebase use timetable-5230e
-firebase dataconnect:sql:setup
-firebase dataconnect:sdk:generate
-firebase emulators:start --only auth,dataconnect
+```java
+FirebaseAuth.getInstance().setCustomUserClaims(uid, Map.of(
+    "institutionId", "timetable-5230e",
+    "role", "SUPER_ADMIN"
+));
 ```
 
-The SQL setup step provisions or links the Cloud SQL for PostgreSQL instance and SQL Connect service. Review the selected region and any billing or trial prompts in Firebase before proceeding. The emulator uses a local PGLite database; it does not require production database access.
+Supported roles are `SUPER_ADMIN`, `DEPARTMENT_ADMIN`, `TIMETABLE_INCHARGE`, `ACADEMIC_APPROVER`, `FACULTY`, and `STUDENT_VIEWER`. Never let a user set their own role or institution claim.
 
-When the local schema and operations are ready, deploy them with:
+## Realtime Database shape
 
-```sh
-firebase deploy --only dataconnect
+Every record lives under `/institutions/{institutionId}`. The API reads common reference data from `departments`, `academicTerms`, `faculty`, `subjects`, `sections`, and `rooms`. Solver-ready, administrator-approved inputs are stored at `/institutions/{institutionId}/schedulingInputs/{termId}` and follow the AI service `SchedulingProblem` schema:
+
+```json
+{
+  "time_slots": [{"id":"mon-1","day":"MON","period":1,"is_teaching_period":true}],
+  "sections": [{"id":"cse-a","name":"CSE A","student_count":48}],
+  "faculty": [{"id":"fac-1","name":"Dr Rao","department_id":"cse","qualified_subject_ids":["dbms"],"unavailable_slot_ids":[],"preferred_slot_ids":[],"max_weekly_periods":18,"active":true}],
+  "rooms": [{"id":"room-1","name":"A-101","capacity":60,"room_type":"CLASSROOM","equipment":[],"unavailable_slot_ids":[]}],
+  "requirements": [{"id":"req-1","subject_id":"dbms","subject_name":"Database Systems","section_id":"cse-a","sessions_per_week":3,"faculty_ids":["fac-1"],"room_type":"CLASSROOM","required_equipment":[],"periods_per_session":1,"preferred_slot_ids":[],"excluded_slot_ids":[]}]
+}
 ```
 
-## Data model and access
+The API stores interpretations under `interpretedRequirements`, asynchronous solver jobs under `generationJobs`, versioned draft records under `timetableDrafts`, immutable published snapshots and an active pointer under `publishedTimetables`, and audit records under `auditLogs`. Policy documents can be stored under `policyDocuments/{documentId}` with `title` and a `chunks` map containing `id`, `text`, `page`, and `section` fields. Policy answers retrieve text-matching chunks and return only citations mapped from those chunks.
 
-`dataconnect/schema/schema.gql` defines institutions, academic terms, departments, faculty, subjects, sections, rooms, availability, teaching requirements, timetable versions and entries, generation jobs, absences, substitutions, policy documents and chunks, and audit logs. Policy chunks have a 768-dimension vector column.
+## Run locally
 
-Connector operations are in `dataconnect/connector/`. The initial operations cover profile and reference-data reads, published student timetable reads, and selected setup and absence mutations. Tenant access is scoped using Firebase Authentication custom claims: `institutionId`, `role`, and (for student timetable reads) `sectionId`. Assign these claims only from a trusted Admin SDK process. Never accept role or institution claims from a client request.
+1. From `frontend/web`, install dependencies with `pnpm install`, then copy `frontend/web/.env.example` to `frontend/web/.env.local` and add the Web App config from Firebase project settings.
+2. Copy the repository root `.env.example` to `.env` and `ai-service/.env.example` to `ai-service/.env`. Set the exact `FIREBASE_DATABASE_URL` in the root file. Create the shared backend key with `openssl rand -base64 32` and set it as `AI_SERVICE_API_KEY` in both files.
+3. Add the Gemini key to `ai-service/.env` for requirement parsing and policy summaries.
+4. Run the AI service from `ai-service`: `uv sync && uv run uvicorn app.main:app --reload --port 8000`.
+5. Run the Spring API from `backend`, loading the root env first: `set -a && source ../.env && set +a && mvn spring-boot:run`.
+6. Run Next.js from `frontend/web` with `pnpm dev`.
 
-This is a Firebase backend foundation, not a completed application migration: the repository had no Supabase implementation to port. The Next.js UI, Firebase sign-in flows, trusted account provisioning, timetable solver integration, approval lifecycle, and end-to-end tests still need to be built. Review and compile the SQL Connect schema and operations with the Firebase CLI before deploying them.
+Firebase emulators are configured for Auth on port 9099 and RTDB on port 9000. Start them from the repository root with `npx -y firebase-tools@latest emulators:start --only auth,database`. For the Spring Admin SDK to use the RTDB emulator, set `FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:9000` in the shell before starting the API and point `FIREBASE_DATABASE_URL` at the emulator database URL. For the web app, set `NEXT_PUBLIC_USE_FIREBASE_EMULATORS=true` in `frontend/web/.env.local` to use the Auth emulator. Never set the emulator flag in production.
+
+## API flow
+
+- `GET /api/v1/dashboard` returns institution-scoped counts, academic terms, and published timetable pointers.
+- `POST /api/v1/ai/parse-requirements` reads the approved term catalog, asks Gemini to interpret a request, validates every returned ID against that catalog, and stores the result as `PENDING_REVIEW`.
+- `POST /api/v1/timetables/generate` requires the reviewed interpretation ID and queues a job. `GET /api/v1/timetable-jobs/{id}` reports progress; the result is stored as a draft only when the CP-SAT solver and independent validator both pass.
+- `POST /api/v1/timetables/{draftId}/approve` and `/publish` enforce separate role-gated lifecycle transitions and preserve published snapshots.
+- `POST /api/v1/substitutions/recommend` filters unqualified, unavailable, and over-capacity candidates before applying the 40/20/15/15/10 default score.
+- `POST /api/v1/ai/policies/query` searches institution-scoped policy chunks and returns grounded answers with source references. This first pass uses lexical retrieval; policy document upload, PDF/DOCX extraction, vector embeddings, and richer ranking are not included yet.
+
+## Current implementation boundary
+
+This is an integrated MVP foundation, not a deployed production service. Academic reference records and approved scheduling inputs must be provisioned in RTDB; an admin CRUD and document-ingestion UI, absence approval/reassignment, exports, and deployment automation remain to be added. Do not expose the Admin SDK or deploy permissive RTDB rules. Review the data model, role grants, AI provider settings, and institution-specific policies before production use.

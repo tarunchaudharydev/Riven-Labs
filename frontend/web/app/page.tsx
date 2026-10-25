@@ -1,69 +1,233 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import type { User } from "firebase/auth";
+import { backendRequest } from "../lib/backend";
+import { getFirebaseAuth } from "../lib/firebase";
+
+type DashboardData = {
+  institutionName: string;
+  role: string;
+  counts: Record<string, number>;
+  terms: Record<string, { name?: string; status?: string }>;
+  publishedTimetables: { termId: string; draftId: string; publishedAt: string; entries: TimetableEntry[] | Record<string, TimetableEntry> }[];
+  drafts?: TimetableDraft[];
+};
+type TimetableEntry = { requirement_id: string; subject_id: string; subject_name: string; section_id: string; faculty_id: string; room_id: string; day: string; period: number; duration: number; slot_ids: string[] };
+type TimetableDraft = { id: string; termId: string; status: string; solverStatus: string; entries: TimetableEntry[] | Record<string, TimetableEntry>; diagnostics?: { code: string; message: string }[]; validation?: { valid: boolean } };
+type Interpretation = { original_text: string; changes: { subject_id: string; section_id: string; sessions_per_week?: number; preferred_faculty_ids: string[]; excluded_slot_ids: string[]; preferred_slot_ids: string[]; periods_per_session?: number; priority: string }[]; clarification_questions: string[]; unsupported_requirements: string[]; requires_review: boolean };
+type ParseResponse = { id: string; status: string; interpretation: Interpretation };
+type Job = { jobId?: string; id?: string; status: string; draftId?: string; message?: string; diagnostics?: { code: string; message: string }[] };
+type SubstituteResult = { candidates: { id: string; name: string; score: number; reasons: string[] }[]; excluded_candidate_ids: string[]; weights: Record<string, number> };
+type PolicyResponse = { answer: string; citations: { document_id: string; title: string; page?: number; section?: string }[]; supported_by_documents: boolean };
+
+const iconPaths: Record<string, string> = {
+  grid: "M3 3h7v7H3z M14 3h7v7h-7z M14 14h7v7h-7z M3 14h7v7H3z",
+  calendar: "M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 0 1 2 2v13H3V6a2 2 0 0 1 2-2z",
+  users: "M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m16 0v-2a4 4 0 0 0-3-3.87M14 3.13a4 4 0 0 1 0 7.75M10 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z",
+  spark: "m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3zm7 12 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z",
+  book: "M4 4.5A2.5 2.5 0 0 1 6.5 2H20v17H6.5A2.5 2.5 0 0 0 4 21.5v-17zM4 18.5A2.5 2.5 0 0 1 6.5 16H20",
+  arrow: "M5 12h14m-7-7 7 7-7 7",
+  clock: "M12 8v4l2.5 2.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z",
+  logout: "M10 17l5-5-5-5m5 5H3m9-9h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7",
+  check: "m5 12 4 4L19 6",
+  chevron: "m9 18 6-6-6-6",
+};
+
+function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={iconPaths[name] || iconPaths.grid} /></svg>;
+}
+function list<T>(value: T[] | Record<string, T> | undefined): T[] { return !value ? [] : Array.isArray(value) ? value : Object.values(value); }
+function initials(user: User) { return (user.displayName || user.email || "User").split(/[\s@._-]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase(); }
+function dayIndex(day: string) { const index = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].indexOf(day.slice(0, 3).toUpperCase()); return index < 0 ? 8 : index; }
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [authError, setAuthError] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [signingIn, setSigningIn] = useState(false);
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [selectedTerm, setSelectedTerm] = useState("");
+  const [requirementText, setRequirementText] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [interpretationId, setInterpretationId] = useState("");
+  const [interpretation, setInterpretation] = useState<Interpretation | null>(null);
+  const [reviewed, setReviewed] = useState(false);
+  const [job, setJob] = useState<Job | null>(null);
+  const [draft, setDraft] = useState<TimetableDraft | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [policyQuestion, setPolicyQuestion] = useState("");
+  const [policyAnswer, setPolicyAnswer] = useState<PolicyResponse | null>(null);
+  const [substitutions, setSubstitutions] = useState<Record<string, SubstituteResult>>({});
+
+  useEffect(() => {
+    try {
+      return onAuthStateChanged(getFirebaseAuth(), (current) => { setUser(current); setData(null); setAuthReady(true); setAuthError(""); }, (error) => { setAuthError(error.message); setAuthReady(true); });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Firebase could not be initialized.";
+      queueMicrotask(() => { setAuthError(message); setAuthReady(true); });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    backendRequest<DashboardData>(user, "/api/v1/dashboard").then((result) => {
+      if (cancelled) return;
+      setData(result); setLoadError("");
+      setSelectedTerm((current) => current || Object.keys(result.terms || {})[0] || "");
+    }).catch((error: unknown) => { if (!cancelled) setLoadError(error instanceof Error ? error.message : "The timetable backend could not be reached."); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !job?.jobId || !["QUEUED", "RUNNING"].includes(job.status)) return;
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await backendRequest<Job>(user, `/api/v1/timetable-jobs/${job.jobId}`);
+        setJob({ ...next, jobId: job.jobId });
+        if (next.status === "COMPLETED" && next.draftId) {
+          const [nextDraft, dashboard] = await Promise.all([
+            backendRequest<TimetableDraft>(user, `/api/v1/timetables/drafts/${next.draftId}`),
+            backendRequest<DashboardData>(user, "/api/v1/dashboard"),
+          ]);
+          setDraft(nextDraft);
+          setData(dashboard);
+        }
+      } catch (error) { setActionError(error instanceof Error ? error.message : "Could not check generation status."); }
+    }, 1800);
+    return () => window.clearTimeout(timer);
+  }, [user, job]);
+
+  const publishedSchedules = useMemo(() => {
+    if (!data?.publishedTimetables) return [];
+    return [...list(data.publishedTimetables)].sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
+  }, [data]);
+  const activeSchedule = publishedSchedules[0];
+  const activeEntries = [...list(activeSchedule?.entries)].sort((a, b) => dayIndex(a.day) - dayIndex(b.day) || a.period - b.period);
+  const terms = data?.terms ? Object.entries(data.terms) : [];
+
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setSigningIn(true); setAuthError("");
+    try { await signInWithEmailAndPassword(getFirebaseAuth(), email.trim(), password); setPassword(""); }
+    catch (error) { setAuthError(error instanceof Error ? error.message : "Sign-in failed. Check your email and password."); }
+    finally { setSigningIn(false); }
+  }
+  async function parseRequirements(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!user || !selectedTerm || !requirementText.trim()) return;
+    setParsing(true); setActionError(""); setInterpretation(null); setInterpretationId(""); setReviewed(false); setJob(null); setDraft(null);
+    try {
+      const response = await backendRequest<ParseResponse>(user, "/api/v1/ai/parse-requirements", { method: "POST", body: JSON.stringify({ termId: selectedTerm, text: requirementText.trim() }) });
+      setInterpretationId(response.id); setInterpretation(response.interpretation);
+    } catch (error) { setActionError(error instanceof Error ? error.message : "Could not interpret the scheduling request."); }
+    finally { setParsing(false); }
+  }
+  async function generateDraft() {
+    if (!user || !interpretationId || !reviewed || !selectedTerm) return;
+    setBusy(true); setActionError(""); setJob(null); setDraft(null);
+    try {
+      const response = await backendRequest<Job>(user, "/api/v1/timetables/generate", { method: "POST", body: JSON.stringify({ termId: selectedTerm, interpretationId }) });
+      setJob({ ...response, jobId: response.jobId });
+    } catch (error) { setActionError(error instanceof Error ? error.message : "Could not start timetable generation."); }
+    finally { setBusy(false); }
+  }
+  async function queryPolicy(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!user || !policyQuestion.trim()) return;
+    setBusy(true); setActionError(""); setPolicyAnswer(null);
+    try { setPolicyAnswer(await backendRequest<PolicyResponse>(user, "/api/v1/ai/policies/query", { method: "POST", body: JSON.stringify({ question: policyQuestion.trim() }) })); }
+    catch (error) { setActionError(error instanceof Error ? error.message : "Could not search policy documents."); }
+    finally { setBusy(false); }
+  }
+  async function recommend(entry: TimetableEntry) {
+    if (!user || !activeSchedule) return;
+    const key = `${entry.requirement_id}-${entry.day}-${entry.period}`; setBusy(true); setActionError("");
+    try {
+      const result = await backendRequest<SubstituteResult>(user, "/api/v1/substitutions/recommend", { method: "POST", body: JSON.stringify({ termId: activeSchedule.termId, requirementId: entry.requirement_id, day: entry.day, period: entry.period }) });
+      setSubstitutions((current) => ({ ...current, [key]: result }));
+    } catch (error) { setActionError(error instanceof Error ? error.message : "Could not rank available faculty."); }
+    finally { setBusy(false); }
+  }
+  async function transitionDraft(action: "approve" | "publish") {
+    if (!user || !draft) return;
+    setBusy(true); setActionError("");
+    try {
+      const result = await backendRequest<{ status: string }>(user, `/api/v1/timetables/${draft.id}/${action}`, { method: "POST" });
+      const dashboard = await backendRequest<DashboardData>(user, "/api/v1/dashboard");
+      setDraft({ ...draft, status: result.status });
+      setData(dashboard);
+    } catch (error) { setActionError(error instanceof Error ? error.message : `Could not ${action} this timetable.`); }
+    finally { setBusy(false); }
+  }
+  async function openDraft(draftId: string) {
+    if (!user) return;
+    setBusy(true); setActionError("");
+    try { setDraft(await backendRequest<TimetableDraft>(user, `/api/v1/timetables/drafts/${draftId}`)); }
+    catch (error) { setActionError(error instanceof Error ? error.message : "Could not open the selected draft."); }
+    finally { setBusy(false); }
+  }
+
+  if (!authReady) return <LoadingScreen />;
+  if (!user) return <LoginScreen email={email} password={password} setEmail={setEmail} setPassword={setPassword} onSubmit={submitLogin} busy={signingIn} error={authError} />;
+  const displayName = user.displayName || user.email?.split("@")[0] || "Administrator";
+  const roleName = data?.role?.replaceAll("_", " ").toLowerCase() || "checking access";
+  const currentJob = job?.jobId ? job : null;
+  const canSchedule = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE"].includes(data?.role || "");
+  const canReview = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE", "ACADEMIC_APPROVER"].includes(data?.role || "");
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <a className="brand" href="#overview" aria-label="Riven Labs home"><span className="brand-mark"><span /></span><span><strong>riven</strong><small>ACADEMIC SYSTEMS</small></span></a>
+      <div className="side-label">WORKSPACE</div>
+      <nav className="side-nav" aria-label="Main navigation"><a className="nav-link active" href="#overview"><Icon name="grid" />Overview</a><a className="nav-link" href="#timetable"><Icon name="calendar" />Timetable</a><a className="nav-link" href="#academics"><Icon name="users" />Academic data</a><a className="nav-link" href="#assistant"><Icon name="spark" />AI assistant<span className="nav-pill">NEW</span></a><a className="nav-link" href="#policies"><Icon name="book" />Policy library</a></nav>
+      <div className="sidebar-bottom"><div className="sidebar-help"><div className="help-icon"><Icon name="spark" size={16} /></div><strong>Need a hand?</strong><p>Ask the policy assistant about your institution&apos;s scheduling rules.</p><a href="#policies">Open assistant <Icon name="arrow" size={14} /></a></div><button className="profile-row" onClick={() => signOut(getFirebaseAuth())} aria-label="Sign out"><span className="avatar">{initials(user)}</span><span className="profile-copy"><strong>{displayName}</strong><small>{roleName}</small></span><Icon name="logout" size={16} /></button></div>
+    </aside>
+
+    <main className="main-content" id="overview">
+      <header className="topbar"><div className="breadcrumbs">Workspace <Icon name="chevron" size={14} /> <strong>Overview</strong></div><div className="top-actions"><span className="secure-status"><i /> Firebase connected</span><button className="top-avatar" onClick={() => signOut(getFirebaseAuth())} aria-label={`Sign out, ${displayName}`} title="Sign out">{initials(user)}</button></div></header>
+      <div className="page-wrap">
+        <section className="welcome-row"><div><p className="eyebrow">ACADEMIC OPERATIONS</p><h1>Good day, {displayName.split(" ")[0]}<span className="greeting-dot">.</span></h1><p className="welcome-sub">Here&apos;s what&apos;s happening across {data?.institutionName || "your institution"}.</p></div>{canSchedule && <button className="button button-primary" onClick={() => document.getElementById("assistant")?.scrollIntoView({ behavior: "smooth" })}><Icon name="spark" size={16} />Generate a timetable <Icon name="arrow" size={15} /></button>}</section>
+        {loadError && <div className="alert alert-error" role="alert"><strong>Backend connection issue</strong><span>{loadError}</span><button onClick={() => user && backendRequest<DashboardData>(user, "/api/v1/dashboard").then(setData).catch((error) => setLoadError(error.message))}>Try again</button></div>}
+        {actionError && <div className="alert alert-error" role="alert"><strong>Action couldn&apos;t be completed</strong><span>{actionError}</span><button onClick={() => setActionError("")}>Dismiss</button></div>}
+
+        <section className="hero-card"><div className="hero-copy"><div className="hero-kicker"><span className="hero-dot" /> YOUR SMART TIMETABLE HUB</div><h2>Make every period<br />count.</h2><p>Plan a clearer week with data-backed scheduling and faculty coverage, all in one place.</p><a href="#assistant" className="hero-link">Plan with AI <Icon name="arrow" size={16} /></a></div><div className="hero-art" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="hero-sun" /><div className="hero-grid"><span /><span /><span /><span /><span /><span /><span /><span /><span /></div><div className="float-card float-card-top"><i className="float-dot green" /><span><b>Scheduling engine</b><small>Constraint validated</small></span><Icon name="check" size={15} /></div><div className="float-card float-card-bottom"><span className="mini-spark">✦</span><span><b>Smarter planning</b><small>Powered by your data</small></span></div><div className="art-ring" /></div></section>
+
+        <section className="metrics-grid" id="academics" aria-label="Academic data summary"><MetricCard title="Faculty members" value={data?.counts.faculty} icon="users" tone="mint" detail="In your academic data" /><MetricCard title="Subjects" value={data?.counts.subjects} icon="book" tone="lavender" detail="Available to schedule" /><MetricCard title="Student sections" value={data?.counts.sections} icon="grid" tone="peach" detail="Across departments" /><MetricCard title="Timetable drafts" value={data?.counts.drafts} icon="calendar" tone="blue" detail="Ready for review" /></section>
+
+        <div className="content-grid">
+          <section className="panel schedule-panel" id="timetable"><div className="panel-heading"><div><p className="eyebrow">LIVE SCHEDULE</p><h3>Published timetable</h3></div>{activeSchedule && <span className="status-badge published"><i />Published</span>}</div>
+            {activeSchedule ? <><p className="panel-note">Academic term <strong>{activeSchedule.termId}</strong> · {activeEntries.length} scheduled sessions</p><div className="schedule-list">{activeEntries.slice(0, 7).map((entry, index) => { const key = `${entry.requirement_id}-${entry.day}-${entry.period}`; const cover = substitutions[key]; return <div className="schedule-row" key={`${key}-${index}`}><div className={`subject-color color-${index % 5}`}><Icon name="book" size={16} /></div><div className="schedule-info"><strong>{entry.subject_name || entry.subject_id}</strong><span>{entry.section_id} · {entry.day} · Period {entry.period}{entry.duration > 1 ? `–${entry.period + entry.duration - 1}` : ""}</span></div><div className="schedule-room">{entry.room_id}</div>{!["STUDENT_VIEWER", "FACULTY"].includes(data?.role || "") && <button className="icon-button cover-button" onClick={() => recommend(entry)} disabled={busy} title="Recommend a substitute" aria-label={`Recommend a substitute for ${entry.subject_name || entry.subject_id}`}><Icon name="users" size={16} /></button>}{cover && <div className="cover-popover"><b>Eligible substitutes</b>{cover.candidates.length ? cover.candidates.slice(0, 3).map((candidate) => <p key={candidate.id}>{candidate.name}<span>{candidate.score.toFixed(1)} pts</span></p>) : <small>No eligible candidates for this period.</small>}</div>}</div>; })}{!activeEntries.length && <EmptyLine text="The published version has no scheduled sessions." />}</div></> : <EmptyState icon="calendar" title="No published timetable yet" body="Once a reviewed draft is approved and published, the active schedule will appear here." />}
+          </section>
+
+          {canSchedule && <section className="panel assistant-panel" id="assistant"><div className="panel-heading"><div><p className="eyebrow">CONSTRAINT-BASED PLANNING</p><h3>Timetable copilot</h3></div><span className="ai-badge"><Icon name="spark" size={14} /> AI + CP-SAT</span></div><p className="assistant-intro">Describe what needs to be scheduled. AI translates it into a reviewable request; the solver checks hard constraints.</p>
+            <form onSubmit={parseRequirements} className="composer-form"><label className="field-label" htmlFor="term">Academic term</label>{terms.length ? <select id="term" className="select-input" value={selectedTerm} onChange={(event) => setSelectedTerm(event.target.value)}><option value="">Choose a term</option>{terms.map(([id, term]) => <option key={id} value={id}>{term.name || id}</option>)}</select> : <input id="term" className="text-input" value={selectedTerm} onChange={(event) => setSelectedTerm(event.target.value)} placeholder="Term ID from your academic setup" />}<label className="field-label" htmlFor="request">Scheduling request</label><textarea id="request" className="request-input" rows={4} value={requirementText} onChange={(event) => setRequirementText(event.target.value)} placeholder="Describe a constraint using your approved section, subject, faculty, and time-slot names…" /><div className="composer-footer"><span><Icon name="clock" size={14} /> Requires your review before scheduling</span><button className="button button-dark" disabled={parsing || !selectedTerm || requirementText.trim().length < 4}>{parsing ? "Interpreting…" : <>Interpret request <Icon name="arrow" size={14} /></>}</button></div></form>
+            {interpretation && <div className="interpretation-card"><div className="interpretation-title"><span className="review-icon"><Icon name="check" size={14} /></span><div><strong>Review the interpretation</strong><small>Nothing will be scheduled until you confirm.</small></div></div>{interpretation.clarification_questions?.length > 0 && <div className="review-warning"><b>Clarification needed</b>{interpretation.clarification_questions.map((question, i) => <p key={i}>{question}</p>)}</div>}{interpretation.unsupported_requirements?.length > 0 && <div className="review-warning"><b>Could not apply</b>{interpretation.unsupported_requirements.map((item, i) => <p key={i}>{item}</p>)}</div>}{interpretation.changes?.length > 0 ? <ul className="change-list">{interpretation.changes.map((change, index) => <li key={`${change.subject_id}-${change.section_id}-${index}`}><strong>{change.subject_id}</strong><span>{change.section_id}{change.sessions_per_week ? ` · ${change.sessions_per_week} sessions/week` : ""}{change.periods_per_session && change.periods_per_session > 1 ? ` · ${change.periods_per_session}-period block` : ""}</span>{change.preferred_faculty_ids?.length > 0 && <small>Preferred faculty: {change.preferred_faculty_ids.join(", ")}</small>}{change.excluded_slot_ids?.length > 0 && <small>Avoid: {change.excluded_slot_ids.join(", ")}</small>}</li>)}</ul> : <p className="muted-copy">No scheduling changes were extracted from this request.</p>}<label className="review-check"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} disabled={Boolean(interpretation.clarification_questions?.length)} /><span>I checked this interpretation and want to create a draft.</span></label><button className="button button-primary full-button" onClick={generateDraft} disabled={!reviewed || busy || Boolean(interpretation.clarification_questions?.length) || !interpretation.changes?.length}>{busy ? "Starting solver…" : "Generate validated draft"}<Icon name="arrow" size={15} /></button></div>}
+            {currentJob && <div className={`job-card ${currentJob.status === "FAILED" ? "job-failed" : ""}`}><span className="job-spinner" /><div><strong>{currentJob.status === "COMPLETED" ? "Draft ready for review" : currentJob.status === "FAILED" ? "Generation needs attention" : "Solving timetable constraints"}</strong><small>{currentJob.message || "Checking faculty, section, room, and availability conflicts…"}</small></div><span className="job-state">{currentJob.status}</span></div>}
+          </section>}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+
+        {canReview && <section className="panel queue-panel"><div className="panel-heading"><div><p className="eyebrow">VERSION REVIEW</p><h3>Draft queue</h3></div><span className="queue-count">{data?.drafts?.length || 0} open</span></div>{data?.drafts?.length ? <div className="draft-list">{data.drafts.map((item) => <div className="draft-list-item" key={item.id}><div><strong>{item.termId}</strong><small>{item.solverStatus || "Awaiting review"} · {list(item.entries).length} classes</small></div><span className={`status-badge ${item.status.toLowerCase()}`}><i />{item.status}</span><button className="button button-light" onClick={() => openDraft(item.id)} disabled={busy}>Open <Icon name="chevron" size={14} /></button></div>)}</div> : <EmptyLine text="No timetable drafts are waiting for review." />}</section>}
+        {draft && <section className="panel draft-panel"><div className="panel-heading"><div><p className="eyebrow">VERSIONED DRAFT · {draft.solverStatus}</p><h3>Timetable ready for review</h3></div><span className={`status-badge ${draft.status.toLowerCase()}`}><i />{draft.status}</span></div><p className="panel-note">This version contains {list(draft.entries).length} classes and passed independent validation.</p>{draft.diagnostics?.map((item) => <p className="diagnostic-line" key={item.code}>{item.code}: {item.message}</p>)}<div className="draft-actions">{data?.role === "ACADEMIC_APPROVER" && draft.status === "DRAFT" && <button className="button button-primary" onClick={() => transitionDraft("approve")} disabled={busy}>Approve timetable <Icon name="check" size={15} /></button>}{data?.role === "SUPER_ADMIN" && draft.status === "APPROVED" && <button className="button button-primary" onClick={() => transitionDraft("publish")} disabled={busy}>Publish version <Icon name="arrow" size={15} /></button>}</div></section>}
+
+        {data?.role !== "STUDENT_VIEWER" && <section className="panel policy-panel" id="policies"><div className="panel-heading"><div><p className="eyebrow">GROUNDED ANSWERS</p><h3>Ask your policy library</h3></div><span className="policy-lock">Institution-only</span></div><p className="assistant-intro">Answers use retrieved policy excerpts and include source citations. Unsupported questions are called out.</p><form className="policy-form" onSubmit={queryPolicy}><input className="text-input" aria-label="Ask your institution policy library" value={policyQuestion} onChange={(event) => setPolicyQuestion(event.target.value)} placeholder="Ask about workload limits, labs, or scheduling rules…" /><button className="button button-dark" disabled={busy || policyQuestion.trim().length < 4}>Ask <Icon name="arrow" size={14} /></button></form>{policyAnswer && <div className="policy-answer"><p>{policyAnswer.answer}</p>{!policyAnswer.supported_by_documents && <span className="unsupported-note">No supporting source found in indexed policy documents.</span>}{policyAnswer.citations?.length > 0 && <div className="citations">{policyAnswer.citations.map((citation, index) => <span key={`${citation.document_id}-${index}`}>{citation.title}{citation.page ? ` · p. ${citation.page}` : ""}{citation.section ? ` · ${citation.section}` : ""}</span>)}</div>}</div>}</section>}
+        <footer className="page-footer"><span>Riven Labs · Academic scheduling</span><span>Signed in as <strong>{user.email}</strong></span></footer>
+      </div>
+    </main>
+  </div>;
+}
+
+function MetricCard({ title, value, icon, tone, detail }: { title: string; value?: number; icon: string; tone: string; detail: string }) {
+  return <article className="metric-card"><div className={`metric-icon ${tone}`}><Icon name={icon} size={18} /></div><div className="metric-value">{value === undefined ? "—" : value}</div><div className="metric-title">{title}</div><div className="metric-detail">{detail}</div></article>;
+}
+function EmptyState({ icon, title, body }: { icon: string; title: string; body: string }) { return <div className="empty-state"><span className="empty-icon"><Icon name={icon} size={21} /></span><strong>{title}</strong><p>{body}</p></div>; }
+function EmptyLine({ text }: { text: string }) { return <p className="empty-line">{text}</p>; }
+function LoadingScreen() { return <div className="auth-screen"><div className="loading-mark"><span className="brand-mark"><span /></span><p>Loading your workspace…</p></div></div>; }
+function LoginScreen({ email, password, setEmail, setPassword, onSubmit, busy, error }: { email: string; password: string; setEmail: (value: string) => void; setPassword: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; busy: boolean; error: string }) {
+  return <main className="auth-screen"><div className="auth-aside"><a className="brand auth-brand" href="#"><span className="brand-mark"><span /></span><span><strong>riven</strong><small>ACADEMIC SYSTEMS</small></span></a><div className="auth-aside-copy"><span className="hero-kicker"><span className="hero-dot" /> SMARTER ACADEMIC PLANNING</span><h1>Make room for<br />a better week.</h1><p>A clearer way to plan classes, protect faculty time, and find the right cover when plans change.</p><div className="auth-art"><div className="art-ring" /><div className="hero-sun" /><div className="auth-art-grid"><span /><span /><span /><span /><span /><span /><span /><span /><span /></div></div></div><div className="auth-aside-footer">Riven Labs · Timetable management</div></div><div className="auth-main"><form className="login-card" onSubmit={onSubmit}><div className="login-mark"><Icon name="grid" size={20} /></div><p className="eyebrow">WELCOME BACK</p><h2>Sign in to Riven</h2><p className="login-intro">Use your institution account to open your workspace.</p>{error && <div className="login-error">{error}</div>}<label htmlFor="email">Work email</label><input id="email" className="text-input" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@institution.edu" /><label htmlFor="password">Password</label><input id="password" className="text-input" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" /><button className="button button-primary login-button" disabled={busy}>{busy ? "Signing in…" : "Continue to workspace"}<Icon name="arrow" size={15} /></button><p className="login-footnote">Access is provisioned by your timetable administrator.</p></form></div></main>;
 }
