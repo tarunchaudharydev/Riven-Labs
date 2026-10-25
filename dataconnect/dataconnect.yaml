@@ -1,0 +1,13 @@
+specVersion: "v1"
+serviceId: "timetable"
+location: "asia-south1"
+schema:
+  source: "./schema"
+  datasource:
+    postgresql:
+      database: "timetable"
+      cloudSql:
+        instanceId: "timetable-sql"
+        schemaValidation: "COMPATIBLE"
+connectorDirs:
+  - "./connector"
