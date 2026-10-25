@@ -1,46 +1,65 @@
-from enum import Enum
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class TimePreference(str, Enum):
-    MORNING = "MORNING"
-    AFTERNOON = "AFTERNOON"
-    EVENING = "EVENING"
-    BEFORE_LUNCH = "BEFORE_LUNCH"
-    AFTER_LUNCH = "AFTER_LUNCH"
-    NONE = "NONE"
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-class ConstraintType(str, Enum):
-    PREFERRED_TIME = "PREFERRED_TIME"
-    MAX_CLASSES_PER_DAY = "MAX_CLASSES_PER_DAY"
-    MIN_CLASSES_PER_DAY = "MIN_CLASSES_PER_DAY"
-    AVOID_DAY = "AVOID_DAY"
-    PREFERRED_DAY = "PREFERRED_DAY"
-    CONSECUTIVE_CLASSES = "CONSECUTIVE_CLASSES"
-    AVOID_PERIOD = "AVOID_PERIOD"
+class CatalogEntity(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=160)
+    department_id: str | None = None
 
 
-class SubjectRequirement(BaseModel):
-    subject: str = Field(description="Name of the subject")
-    classes_per_week: int = Field(
-        description="Number of classes required per week",
-        ge=1,
-    )
-    teacher: str | None = Field(
-        default=None,
-        description="Teacher assigned to the subject, if specified",
-    )
+class CatalogTimeSlot(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    day: str = Field(min_length=1, max_length=32)
+    period: int = Field(ge=1, le=24)
+    label: str | None = None
 
 
-class TimetableConstraint(BaseModel):
-    type: ConstraintType
-    subject: str | None = None
-    value: str | int | bool
+class RequirementCatalog(StrictModel):
+    sections: list[CatalogEntity] = Field(default_factory=list, max_length=500)
+    subjects: list[CatalogEntity] = Field(default_factory=list, max_length=1000)
+    faculty: list[CatalogEntity] = Field(default_factory=list, max_length=1000)
+    rooms: list[CatalogEntity] = Field(default_factory=list, max_length=1000)
+    time_slots: list[CatalogTimeSlot] = Field(default_factory=list, max_length=500)
 
 
-class TimetableRequirement(BaseModel):
-    section: str
-    subjects: list[SubjectRequirement]
-    constraints: list[TimetableConstraint] = []
+class RequirementChange(StrictModel):
+    subject_id: str = Field(min_length=1, max_length=128)
+    section_id: str = Field(min_length=1, max_length=128)
+    sessions_per_week: int | None = Field(default=None, ge=1, le=30)
+    preferred_faculty_ids: list[str] = Field(default_factory=list, max_length=20)
+    excluded_slot_ids: list[str] = Field(default_factory=list, max_length=100)
+    preferred_slot_ids: list[str] = Field(default_factory=list, max_length=100)
+    periods_per_session: int | None = Field(default=None, ge=1, le=6)
+    priority: str = Field(default="SOFT", pattern="^(HARD|SOFT)$")
+
+
+class RequirementInterpretation(StrictModel):
+    original_text: str = Field(min_length=1, max_length=4000)
+    changes: list[RequirementChange] = Field(default_factory=list, max_length=100)
+    clarification_questions: list[str] = Field(default_factory=list, max_length=10)
+    unsupported_requirements: list[str] = Field(default_factory=list, max_length=20)
+    requires_review: bool = True
+
+
+class ParseRequirementRequest(StrictModel):
+    text: str = Field(min_length=4, max_length=4000)
+    catalog: RequirementCatalog
+
+
+def validate_catalog_references(result: RequirementInterpretation, catalog: RequirementCatalog) -> RequirementInterpretation:
+    subject_ids = {item.id for item in catalog.subjects}
+    section_ids = {item.id for item in catalog.sections}
+    faculty_ids = {item.id for item in catalog.faculty}
+    slot_ids = {item.id for item in catalog.time_slots}
+    for change in result.changes:
+        if change.subject_id not in subject_ids or change.section_id not in section_ids:
+            raise ValueError("The interpretation referenced a subject or section outside the supplied catalog")
+        if not set(change.preferred_faculty_ids) <= faculty_ids:
+            raise ValueError("The interpretation referenced faculty outside the supplied catalog")
+        if not set(change.excluded_slot_ids + change.preferred_slot_ids) <= slot_ids:
+            raise ValueError("The interpretation referenced time slots outside the supplied catalog")
+    return result

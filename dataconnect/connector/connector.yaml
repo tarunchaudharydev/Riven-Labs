@@ -1,6 +1,0 @@
-connectorId: "timetable"
-generate:
-  javascriptSdk:
-    outputDir: "../../frontend/web/lib/dataconnect/generated"
-    package: "@timetable/dataconnect"
-    packageJsonDir: "../../frontend/web"

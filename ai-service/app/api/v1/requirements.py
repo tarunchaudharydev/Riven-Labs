@@ -1,31 +1,20 @@
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
 
-from app.ai.providers.gemini_provider import GeminiProvider
 from app.core.config import settings
-from app.schemas.requirements import TimetableRequirement
+from app.core.security import require_backend_key
+from app.schemas.requirements import ParseRequirementRequest, RequirementInterpretation
 from app.services.requirement_service import RequirementService
+from app.ai.providers.gemini_provider import GeminiProvider
+
+router = APIRouter(prefix="/requirements", tags=["Requirements"], dependencies=[Depends(require_backend_key)])
 
 
-router = APIRouter(
-    prefix="/requirements",
-    tags=["Requirements"],
-)
-
-
-provider = GeminiProvider(
-    api_key=settings.gemini_api_key
-)
-
-service = RequirementService(provider)
-
-
-class RequirementRequest(BaseModel):
-    text: str
-
-
-@router.post("/parse", response_model=TimetableRequirement)
-async def parse_requirement(
-    request: RequirementRequest,
-):
-    return await service.parse(request.text)
+@router.post("/parse", response_model=RequirementInterpretation)
+async def parse_requirement(request: ParseRequirementRequest) -> RequirementInterpretation:
+    if not settings.gemini_api_key:
+        raise HTTPException(status_code=503, detail="Requirement interpretation is not configured. Set GEMINI_API_KEY.")
+    service = RequirementService(GeminiProvider(settings.gemini_api_key))
+    try:
+        return await service.parse(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

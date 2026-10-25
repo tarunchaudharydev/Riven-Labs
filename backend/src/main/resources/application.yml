@@ -1,0 +1,20 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+spring:
+  application:
+    name: riven-timetable-api
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  threads:
+    virtual:
+      enabled: true
+app:
+  firebase:
+    project-id: ${FIREBASE_PROJECT_ID:timetable-5230e}
+    database-url: ${FIREBASE_DATABASE_URL:}
+  ai:
+    base-url: ${AI_SERVICE_URL:http://localhost:8000}
+    api-key: ${AI_SERVICE_API_KEY:}
+  cors:
+    allowed-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
