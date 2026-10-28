@@ -43,6 +43,7 @@ public class RequirementController {
         Map<String, Object> stored = new LinkedHashMap<>(interpretation);
         stored.put("termId", request.termId());
         stored.put("createdBy", principal.uid());
+        if ("DEPARTMENT_ADMIN".equals(principal.role())) stored.put("departmentId", principal.departmentId());
         stored.put("status", "PENDING_REVIEW");
         stored.put("createdAt", Instant.now().toString());
         database.write(database.tenantPath(principal.institutionId(), "interpretedRequirements", id), stored);

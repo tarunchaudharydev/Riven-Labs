@@ -4,6 +4,7 @@ import com.rivenlabs.timetable.data.RealtimeDatabaseStore;
 import com.rivenlabs.timetable.security.AppPrincipal;
 import com.rivenlabs.timetable.security.RoleGuard;
 import com.rivenlabs.timetable.service.SchedulingInputService;
+import com.rivenlabs.timetable.service.TimetableDirectoryEnricher;
 import com.rivenlabs.timetable.service.TimetableGenerationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -22,11 +23,14 @@ public class TimetableController {
     private final RealtimeDatabaseStore database;
     private final SchedulingInputService inputs;
     private final TimetableGenerationService generation;
+    private final TimetableDirectoryEnricher directory;
     private final RoleGuard roles;
 
     public TimetableController(RealtimeDatabaseStore database, SchedulingInputService inputs,
-                               TimetableGenerationService generation, RoleGuard roles) {
-        this.database = database; this.inputs = inputs; this.generation = generation; this.roles = roles;
+                               TimetableGenerationService generation, TimetableDirectoryEnricher directory,
+                               RoleGuard roles) {
+        this.database = database; this.inputs = inputs; this.generation = generation;
+        this.directory = directory; this.roles = roles;
     }
 
     @PostMapping("/timetables/generate")
@@ -37,6 +41,10 @@ public class TimetableController {
         if (interpretation.isEmpty() || !"PENDING_REVIEW".equals(interpretation.get("status"))
                 || !request.termId().equals(interpretation.get("termId"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This interpretation is no longer pending review for the selected term.");
+        }
+        if ("DEPARTMENT_ADMIN".equals(principal.role())
+                && !Objects.equals(principal.departmentId(), interpretation.get("departmentId"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only generate a timetable from an interpretation for your department.");
         }
         if (!principal.uid().equals(interpretation.get("createdBy")) && !SetHolder.ADMIN_ROLES.contains(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the interpreter or a department administrator can apply this review.");
@@ -61,6 +69,10 @@ public class TimetableController {
     public Map<String, Object> job(@AuthenticationPrincipal AppPrincipal principal, @PathVariable String jobId) {
         Map<String, Object> result = database.readMap(database.tenantPath(principal.institutionId(), "generationJobs", jobId));
         if (result.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Generation job not found.");
+        if ("DEPARTMENT_ADMIN".equals(principal.role())
+                && !Objects.equals(principal.departmentId(), result.get("departmentId"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot read a timetable job from another department.");
+        }
         if (!principal.uid().equals(result.get("createdBy")) && !SetHolder.ADMIN_ROLES.contains(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot read this generation job.");
         }
@@ -73,6 +85,9 @@ public class TimetableController {
         if (result.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Timetable draft not found.");
         boolean reviewer = "SUPER_ADMIN".equals(principal.role()) || "ACADEMIC_APPROVER".equals(principal.role());
         boolean ownDepartment = "DEPARTMENT_ADMIN".equals(principal.role()) && Objects.equals(principal.departmentId(), result.get("departmentId"));
+        if ("DEPARTMENT_ADMIN".equals(principal.role()) && !ownDepartment) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only view timetable drafts for your department.");
+        }
         if (!principal.uid().equals(result.get("generatedBy")) && !reviewer && !ownDepartment) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot view this timetable draft.");
         }
@@ -112,11 +127,13 @@ public class TimetableController {
                 snapshot.put("entries", mergedEntries);
             }
         }
+        List<Map<String, Object>> nextEntries = directory.enrich(
+                principal.institutionId(), termId, maps(snapshot.get("entries")), false);
+        snapshot.put("entries", nextEntries);
         Map<String, Object> changes = new LinkedHashMap<>();
         String publishedPath = database.tenantPath(principal.institutionId(), "publishedTimetables", termId).substring(root.length() + 1);
         changes.put(publishedPath + "/versions/" + draftId, snapshot);
         changes.put(publishedPath + "/active", Map.of("draftId", draftId, "publishedAt", snapshot.get("publishedAt")));
-        List<Map<String, Object>> nextEntries = maps(snapshot.get("entries"));
         Map<String, Object> previousLive = database.readMap(database.tenantPath(principal.institutionId(), "liveTimetableSnapshots", termId));
         changes.put("liveTimetableSnapshots/" + termId, liveSnapshot(snapshot, nextEntries));
         addLiveAudienceCopies(changes, termId, snapshot, nextEntries, maps(previousLive.get("entries")));

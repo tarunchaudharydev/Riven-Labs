@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -41,6 +43,14 @@ class Room(StrictModel):
 
 
 class TeachingRequirement(StrictModel):
+    @model_validator(mode="before")
+    @classmethod
+    def default_session_duration(cls, value: Any) -> Any:
+        if isinstance(value, dict) and value.get("periods_per_session") is None:
+            room_type = str(value.get("room_type", "CLASSROOM")).upper()
+            value = {**value, "periods_per_session": 2 if "LAB" in room_type else 1}
+        return value
+
     id: str
     department_id: str | None = None
     subject_id: str

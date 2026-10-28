@@ -9,6 +9,9 @@ class Candidate(StrictModel):
     id: str
     name: str
     department_id: str
+    department_name: str = ""
+    department_code: str = ""
+    department_block_no: str = ""
     qualified: bool
     available: bool
     remaining_periods: int = Field(ge=0)
@@ -29,6 +32,9 @@ class RankedCandidate(StrictModel):
     name: str
     score: float
     reasons: list[str]
+    department_name: str = ""
+    department_code: str = ""
+    department_block_no: str = ""
 
 
 class SubstitutionResponse(StrictModel):

@@ -2,6 +2,7 @@ package com.rivenlabs.timetable.api;
 
 import com.rivenlabs.timetable.data.RealtimeDatabaseStore;
 import com.rivenlabs.timetable.security.AppPrincipal;
+import com.rivenlabs.timetable.service.TimetableDirectoryEnricher;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,7 +18,12 @@ import java.util.Objects;
 @RequestMapping("/api/v1/dashboard")
 public class DashboardController {
     private final RealtimeDatabaseStore database;
-    public DashboardController(RealtimeDatabaseStore database) { this.database = database; }
+    private final TimetableDirectoryEnricher directory;
+
+    public DashboardController(RealtimeDatabaseStore database, TimetableDirectoryEnricher directory) {
+        this.database = database;
+        this.directory = directory;
+    }
 
     @GetMapping
     public Map<String, Object> dashboard(@AuthenticationPrincipal AppPrincipal principal) {
@@ -28,13 +34,16 @@ public class DashboardController {
         data.put("institutionName", profile.getOrDefault("name", "Your institution"));
         data.put("role", principal.role());
         Map<String, Object> counts = new LinkedHashMap<>();
-        counts.put("departments", database.readMap(root + "/departments").size());
+        boolean departmentScoped = "DEPARTMENT_ADMIN".equals(principal.role());
+        String departmentId = principal.departmentId();
+        Map<String, Object> departments = database.readMap(root + "/departments");
+        counts.put("departments", departmentScoped ? (departments.containsKey(departmentId) ? 1 : 0) : departments.size());
         counts.put("faculty", database.readMap(root + "/faculty").size());
-        counts.put("subjects", database.readMap(root + "/subjects").size());
-        counts.put("sections", database.readMap(root + "/sections").size());
-        counts.put("rooms", database.readMap(root + "/rooms").size());
+        counts.put("subjects", departmentScoped ? countForDepartment(root, "subjects", departmentId, false) : database.readMap(root + "/subjects").size());
+        counts.put("sections", departmentScoped ? countForDepartment(root, "sections", departmentId, false) : database.readMap(root + "/sections").size());
+        counts.put("rooms", departmentScoped ? countForDepartment(root, "rooms", departmentId, true) : database.readMap(root + "/rooms").size());
         counts.put("terms", terms.size());
-        if (isReviewer(principal.role())) counts.put("drafts", database.readMap(root + "/timetableDrafts").size());
+        if (isReviewer(principal.role())) counts.put("drafts", visibleDraftCount(root, principal));
         else counts.put("drafts", 0);
         data.put("counts", counts);
         data.put("terms", terms);
@@ -51,7 +60,7 @@ public class DashboardController {
             Map<String, Object> draft = asMap(item.getValue());
             if (!List.of("DRAFT", "APPROVED").contains(draft.get("status"))) continue;
             if ("TIMETABLE_INCHARGE".equals(principal.role()) && !principal.uid().equals(draft.get("generatedBy"))) continue;
-            if ("DEPARTMENT_ADMIN".equals(principal.role()) && !principal.uid().equals(draft.get("generatedBy"))
+            if ("DEPARTMENT_ADMIN".equals(principal.role())
                     && !Objects.equals(principal.departmentId(), draft.get("departmentId"))) continue;
             Map<String, Object> copy = new LinkedHashMap<>(draft);
             copy.putIfAbsent("id", item.getKey());
@@ -59,6 +68,15 @@ public class DashboardController {
         }
         result.sort((a, b) -> Objects.toString(b.get("createdAt"), "").compareTo(Objects.toString(a.get("createdAt"), "")));
         return result.stream().limit(25).toList();
+    }
+
+    private int visibleDraftCount(String root, AppPrincipal principal) {
+        Map<String, Object> stored = database.readMap(root + "/timetableDrafts");
+        return (int) stored.values().stream().map(this::asMap)
+                .filter(draft -> List.of("DRAFT", "APPROVED").contains(draft.get("status")))
+                .filter(draft -> !"TIMETABLE_INCHARGE".equals(principal.role()) || principal.uid().equals(draft.get("generatedBy")))
+                .filter(draft -> !"DEPARTMENT_ADMIN".equals(principal.role()) || Objects.equals(principal.departmentId(), draft.get("departmentId")))
+                .count();
     }
 
     private List<Map<String, Object>> published(String root, AppPrincipal principal) {
@@ -70,7 +88,7 @@ public class DashboardController {
             String draftId = Objects.toString(pointer.get("draftId"), "");
             if (draftId.isBlank()) continue;
             Map<String, Object> draft = database.readMap(database.tenantPath(principal.institutionId(), "publishedTimetables", item.getKey(), "versions", draftId));
-            List<Map<String, Object>> entries = withSubstitutions(root, item.getKey(), maps(draft.get("entries"))).stream().filter(entry -> {
+            List<Map<String, Object>> entries = directory.enrich(principal.institutionId(), item.getKey(), maps(draft.get("entries")), true).stream().filter(entry -> {
                 if ("STUDENT_VIEWER".equals(principal.role())) return principal.sectionId().equals(entry.get("section_id"));
                 if ("FACULTY".equals(principal.role())) return principal.facultyId().equals(entry.get("faculty_id"));
                 if ("DEPARTMENT_ADMIN".equals(principal.role()) && principal.departmentId() != null) return principal.departmentId().equals(entry.get("department_id"));
@@ -92,22 +110,15 @@ public class DashboardController {
     }
     private boolean isReviewer(String role) { return role.equals("SUPER_ADMIN") || role.equals("DEPARTMENT_ADMIN") || role.equals("TIMETABLE_INCHARGE") || role.equals("ACADEMIC_APPROVER"); }
 
-    private List<Map<String, Object>> withSubstitutions(String root, String termId, List<Map<String, Object>> entries) {
-        Map<String, Object> overlays = database.readMap(root + "/activeSubstitutions/" + termId);
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (Map<String, Object> entry : entries) {
-            Map<String, Object> copy = new LinkedHashMap<>(entry);
-            String key = Objects.toString(copy.get("requirement_id"), "") + "_"
-                    + Objects.toString(copy.get("day"), "").toUpperCase(java.util.Locale.ROOT) + "_"
-                    + Objects.toString(copy.get("period"), "");
-            Object raw = overlays.get(key);
-            if (raw instanceof Map<?, ?> overlay) {
-                copy.put("faculty_id", overlay.get("substituteFacultyId"));
-                copy.put("faculty_name", overlay.get("substituteFacultyName"));
-                copy.put("substitute", true);
-            }
-            result.add(copy);
+    private int countForDepartment(String root, String collection, String departmentId, boolean includeShared) {
+        if (departmentId == null) return 0;
+        int count = 0;
+        for (Object value : database.readMap(root + "/" + collection).values()) {
+            Map<String, Object> record = asMap(value);
+            if (departmentId.equals(record.get("department_id")) || (includeShared && record.get("department_id") == null)) count++;
         }
-        return result;
+        return count;
     }
+
+
 }

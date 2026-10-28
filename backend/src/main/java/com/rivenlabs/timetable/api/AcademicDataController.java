@@ -31,7 +31,14 @@ public class AcademicDataController {
     public Map<String, Object> schedulingInputs(@AuthenticationPrincipal AppPrincipal principal,
                                                 @PathVariable String termId) {
         requireAcademicViewer(principal);
-        return database.readMap(database.tenantPath(principal.institutionId(), "schedulingInputs", termId));
+        Map<String, Object> inputs = database.readMap(database.tenantPath(principal.institutionId(), "schedulingInputs", termId));
+        if (!"DEPARTMENT_ADMIN".equals(principal.role())) return inputs;
+        String departmentId = principal.departmentId();
+        inputs.put("sections", filterInputRows(inputs.get("sections"), departmentId, false));
+        inputs.put("requirements", filterInputRows(inputs.get("requirements"), departmentId, false));
+        inputs.put("faculty", filterInputRows(inputs.get("faculty"), departmentId, true));
+        inputs.put("rooms", filterInputRows(inputs.get("rooms"), departmentId, false, true));
+        return inputs;
     }
 
     @PutMapping("/terms/{termId}/scheduling-inputs")
@@ -84,10 +91,43 @@ public class AcademicDataController {
         requireAcademicViewer(principal);
         String path = collectionPath(principal, collection);
         Map<String, Object> values = database.readMap(path);
-        if (!"DEPARTMENT_ADMIN".equals(principal.role()) || "departments".equals(collection)) return values;
+        if ("faculty".equals(collection)) {
+            Map<String, Object> departments = database.readMap(database.tenantPath(principal.institutionId(), "departments"));
+            Map<String, Object> enriched = new LinkedHashMap<>();
+            values.forEach((id, value) -> {
+                if (!(value instanceof Map<?, ?> raw)) return;
+                Map<String, Object> item = new LinkedHashMap<>((Map<String, Object>) raw);
+                item.putIfAbsent("id", id);
+                Map<String, Object> department = asMap(departments.get(Objects.toString(item.get("department_id"), "")));
+                item.put("department_name", Objects.toString(department.get("name"), "Unassigned department"));
+                item.put("department_code", Objects.toString(department.get("code"), ""));
+                item.put("department_block_no", blockNumber(department.get("block_no")));
+                enriched.put(id, item);
+            });
+            values = enriched;
+        }
+        if (!"DEPARTMENT_ADMIN".equals(principal.role())) return values;
         Map<String, Object> scoped = new LinkedHashMap<>();
+        if ("departments".equals(collection)) {
+            Object ownDepartment = values.get(principal.departmentId());
+            if (ownDepartment != null) scoped.put(principal.departmentId(), ownDepartment);
+            return scoped;
+        }
         values.forEach((id, value) -> {
-            if (value instanceof Map<?, ?> item && principal.departmentId().equals(item.get("department_id"))) scoped.put(id, value);
+            if (!(value instanceof Map<?, ?> raw)) return;
+            Map<String, Object> item = new LinkedHashMap<>((Map<String, Object>) raw);
+            item.putIfAbsent("id", id);
+            if ("faculty".equals(collection)) {
+                scoped.put(id, item);
+            } else if ("rooms".equals(collection)
+                    && (item.get("department_id") == null || principal.departmentId().equals(item.get("department_id")))) {
+                scoped.put(id, item);
+            } else if (Set.of("sections", "subjects").contains(collection)
+                    && principal.departmentId().equals(item.get("department_id"))) {
+                scoped.put(id, item);
+            } else if (!Set.of("departments", "faculty", "rooms", "sections", "subjects").contains(collection)) {
+                scoped.put(id, value);
+            }
         });
         return scoped;
     }
@@ -105,9 +145,10 @@ public class AcademicDataController {
         record.remove("updatedAt");
         record.remove("updatedBy");
         record.put("id", id);
-        validateRecord(principal, collection, record);
         String recordPath = database.tenantPath(principal.institutionId(), collection, id);
         Map<String, Object> previous = database.readMap(recordPath);
+        ensureDepartmentScope(principal, collection, previous);
+        validateRecord(principal, collection, record, previous.isEmpty());
         record.put("createdAt", previous.getOrDefault("createdAt", Instant.now().toString()));
         record.put("createdBy", previous.getOrDefault("createdBy", principal.uid()));
         record.put("updatedAt", Instant.now().toString());
@@ -165,7 +206,7 @@ public class AcademicDataController {
         }
     }
 
-    private void validateRecord(AppPrincipal principal, String collection, Map<String, Object> record) {
+    private void validateRecord(AppPrincipal principal, String collection, Map<String, Object> record, boolean creating) {
         String label = Objects.toString(record.get("name"), "").trim();
         if (label.isBlank() || label.length() > 160) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A name between 1 and 160 characters is required.");
@@ -189,10 +230,32 @@ public class AcademicDataController {
         if ("faculty".equals(collection)) {
             int maxPeriods = number(record.get("max_weekly_periods"));
             if (maxPeriods < 1 || maxPeriods > 80) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Weekly faculty periods must be between 1 and 80.");
+            if (creating) {
+                requiredContact(record, "mobile_number", 32);
+                requiredContact(record, "college_email", 254);
+            }
+            validateEmail(record.get("college_email"), "College email", creating);
+            validateEmail(record.get("personal_email"), "Personal email", false);
+            String mobile = Objects.toString(record.get("mobile_number"), "").trim();
+            String digits = mobile.replaceAll("\\D", "");
+            if (!mobile.isEmpty() && (!mobile.matches("\\+?[0-9() .-]+") || digits.length() < 7 || digits.length() > 15)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mobile number must contain 7 to 15 digits and may start with +.");
+            }
+            record.putIfAbsent("email", record.get("college_email"));
             record.putIfAbsent("active", true);
             record.putIfAbsent("qualified_subject_ids", List.of());
             record.putIfAbsent("unavailable_slot_ids", List.of());
             record.putIfAbsent("preferred_slot_ids", List.of());
+        }
+        if ("departments".equals(collection)) {
+            Object blockNo = record.get("block_no");
+            if (!(blockNo instanceof String value) || !value.matches("[0-9]{2}")) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Department block number must be two digits, for example 01.");
+            }
+            Map<String, Object> departments = database.readMap(database.tenantPath(principal.institutionId(), "departments"));
+            boolean duplicate = departments.entrySet().stream().anyMatch(entry -> !entry.getKey().equals(record.get("id"))
+                    && blockNo.equals(blockNumber(asMap(entry.getValue()).get("block_no"))));
+            if (duplicate) throw new ResponseStatusException(HttpStatus.CONFLICT, "That department block number is already assigned.");
         }
         for (String key : List.of("qualified_subject_ids", "unavailable_slot_ids", "preferred_slot_ids", "equipment")) {
             Object value = record.get(key);
@@ -214,6 +277,30 @@ public class AcademicDataController {
         if (!(record.get(field) instanceof String value) || value.isBlank() || value.length() > 128) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " is required.");
         }
+    }
+
+    private void requiredContact(Map<String, Object> record, String field, int maxLength) {
+        if (!(record.get(field) instanceof String value) || value.isBlank() || value.length() > maxLength) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " is required.");
+        }
+    }
+
+    private void validateEmail(Object value, String label, boolean required) {
+        String email = Objects.toString(value, "").trim();
+        if (email.isEmpty() && !required) return;
+        if (email.length() > 254 || !email.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " must be a valid email address.");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object value) {
+        return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+    }
+
+    private String blockNumber(Object value) {
+        String blockNo = Objects.toString(value, "");
+        return blockNo.matches("[0-9]") ? "0" + blockNo : blockNo;
     }
 
     private int number(Object value) { return value instanceof Number n ? n.intValue() : 0; }
@@ -247,5 +334,23 @@ public class AcademicDataController {
         database.write(database.tenantPath(principal.institutionId(), "auditLogs", key), Map.of(
                 "actorUid", principal.uid(), "action", action, "collection", collection,
                 "entityId", id, "createdAt", Instant.now().toString()));
+    }
+
+    private Object filterInputRows(Object value, String departmentId, boolean includeAll, boolean includeShared) {
+        if (value instanceof List<?> rows) {
+            return rows.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                    .filter(row -> includeAll || departmentId.equals(row.get("department_id"))
+                            || includeShared && row.get("department_id") == null).toList();
+        }
+        if (value instanceof Map<?, ?> rows) {
+            Map<String, Object> scoped = new LinkedHashMap<>();
+            rows.forEach((key, row) -> {
+                if (!(row instanceof Map<?, ?> record)) return;
+                if (includeAll || departmentId.equals(record.get("department_id"))
+                        || includeShared && record.get("department_id") == null) scoped.put(Objects.toString(key), row);
+            });
+            return scoped;
+        }
+        return value;
     }
 }

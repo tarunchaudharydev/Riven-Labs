@@ -37,6 +37,14 @@ def recommend_substitutes(request: SubstitutionRequest) -> SubstitutionResponse:
         if member.section_familiarity:
             reasons.append(f"Section familiarity: {member.section_familiarity}%")
         reasons.append(f"Remaining weekly workload capacity: {member.remaining_periods} periods")
-        ranked.append(RankedCandidate(id=member.id, name=member.name, score=score, reasons=reasons))
+        ranked.append(RankedCandidate(
+            id=member.id,
+            name=member.name,
+            score=score,
+            reasons=reasons,
+            department_name=member.department_name,
+            department_code=member.department_code,
+            department_block_no=member.department_block_no,
+        ))
     ranked.sort(key=lambda item: (-item.score, item.name.casefold(), item.id))
     return SubstitutionResponse(candidates=ranked, excluded_candidate_ids=excluded, weights=WEIGHTS)
