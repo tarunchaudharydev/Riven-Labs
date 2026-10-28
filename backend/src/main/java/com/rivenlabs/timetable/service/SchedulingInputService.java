@@ -37,7 +37,14 @@ public class SchedulingInputService {
         Set<String> seen = new HashSet<>();
         for (Map<String, Object> requirement : maps(input.get("requirements"))) {
             String id = string(requirement.get("subject_id"));
-            if (id != null && seen.add(id)) subjects.add(Map.of("id", id, "name", Objects.toString(requirement.get("subject_name"), id)));
+            if (id != null && seen.add(id)) {
+                Map<String, Object> subject = new LinkedHashMap<>();
+                subject.put("id", id);
+                subject.put("name", Objects.toString(requirement.get("subject_name"), id));
+                putIfPresent(subject, requirement, "code");
+                putIfPresent(subject, requirement, "aliases");
+                subjects.add(subject);
+            }
         }
         return Map.of(
                 "sections", entities(input.get("sections"), true),
@@ -57,10 +64,23 @@ public class SchedulingInputService {
                     && Objects.equals(sectionId, string(req.get("section_id")))).findFirst()
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "An interpreted requirement no longer matches the approved term data."));
             setIfPresent(target, change, "sessions_per_week");
+            if (change.get("max_sessions_per_week") instanceof Number maximum
+                    && target.get("sessions_per_week") instanceof Number current) {
+                target.put("sessions_per_week", Math.min(current.intValue(), maximum.intValue()));
+            }
             setIfPresent(target, change, "periods_per_session");
             mergeValues(target, change, "preferred_faculty_ids");
             mergeValues(target, change, "excluded_slot_ids");
             mergeValues(target, change, "preferred_slot_ids");
+        }
+        List<Map<String, Object>> faculty = maps(copy.get("faculty"));
+        for (Map<String, Object> absence : maps(interpretation.get("faculty_unavailability"))) {
+            String facultyId = string(absence.get("faculty_id"));
+            Map<String, Object> target = faculty.stream()
+                    .filter(person -> Objects.equals(facultyId, string(person.get("id"))))
+                    .findFirst()
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "An interpreted faculty absence no longer matches the approved term data."));
+            mergeValues(target, absence, "unavailable_slot_ids", "excluded_slot_ids");
         }
         return copy;
     }
@@ -75,6 +95,14 @@ public class SchedulingInputService {
         if (target.get(key) instanceof List<?> current) merged.addAll(current);
         merged.addAll(additions);
         target.put(key, new ArrayList<>(merged));
+    }
+
+    private void mergeValues(Map<String, Object> target, Map<String, Object> change, String targetKey, String sourceKey) {
+        if (!(change.get(sourceKey) instanceof List<?> additions) || additions.isEmpty()) return;
+        LinkedHashSet<Object> merged = new LinkedHashSet<>();
+        if (target.get(targetKey) instanceof List<?> current) merged.addAll(current);
+        merged.addAll(additions);
+        target.put(targetKey, new ArrayList<>(merged));
     }
 
     private Map<String, Object> scopeToDepartment(AppPrincipal principal, Map<String, Object> input) {
@@ -113,8 +141,16 @@ public class SchedulingInputService {
             Map<String, Object> entity = new LinkedHashMap<>();
             if (item.get("id") != null) entity.put("id", item.get("id"));
             if (item.get("name") != null) entity.put("name", item.get("name"));
+            putIfPresent(entity, item, "code");
+            putIfPresent(entity, item, "aliases");
             if (includeDepartment && item.get("department_id") != null) entity.put("department_id", item.get("department_id"));
-            if (item.get("day") != null) { entity.put("day", item.get("day")); entity.put("period", item.get("period")); }
+            if (item.get("day") != null) {
+                entity.put("day", item.get("day"));
+                putIfPresent(entity, item, "period");
+                putIfPresent(entity, item, "label");
+                putIfPresent(entity, item, "start_time");
+                putIfPresent(entity, item, "end_time");
+            }
             if (entity.get("id") != null && entity.get("name") != null || entity.get("day") != null) result.add(entity);
         }
         return result;
@@ -145,4 +181,8 @@ public class SchedulingInputService {
     }
 
     private String string(Object value) { return value instanceof String text ? text : null; }
+
+    private void putIfPresent(Map<String, Object> target, Map<String, Object> source, String key) {
+        if (source.get(key) != null) target.put(key, source.get(key));
+    }
 }

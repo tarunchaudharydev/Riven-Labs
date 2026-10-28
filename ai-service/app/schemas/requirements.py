@@ -8,6 +8,8 @@ class StrictModel(BaseModel):
 class CatalogEntity(StrictModel):
     id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=160)
+    code: str | None = Field(default=None, max_length=64)
+    aliases: list[str] = Field(default_factory=list, max_length=20)
     department_id: str | None = None
 
 
@@ -16,6 +18,13 @@ class CatalogTimeSlot(StrictModel):
     day: str = Field(min_length=1, max_length=32)
     period: int = Field(ge=1, le=24)
     label: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+
+
+class FacultyUnavailability(StrictModel):
+    faculty_id: str = Field(min_length=1, max_length=128)
+    excluded_slot_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class RequirementCatalog(StrictModel):
@@ -30,16 +39,24 @@ class RequirementChange(StrictModel):
     subject_id: str = Field(min_length=1, max_length=128)
     section_id: str = Field(min_length=1, max_length=128)
     sessions_per_week: int | None = Field(default=None, ge=1, le=30)
+    max_sessions_per_week: int | None = Field(default=None, ge=1, le=30)
     preferred_faculty_ids: list[str] = Field(default_factory=list, max_length=20)
     excluded_slot_ids: list[str] = Field(default_factory=list, max_length=100)
     preferred_slot_ids: list[str] = Field(default_factory=list, max_length=100)
     periods_per_session: int | None = Field(default=None, ge=1, le=6)
     priority: str = Field(default="SOFT", pattern="^(HARD|SOFT)$")
 
+    @model_validator(mode="after")
+    def count_is_not_both_exact_and_maximum(self):
+        if self.sessions_per_week is not None and self.max_sessions_per_week is not None:
+            raise ValueError("Specify an exact weekly count or a maximum, not both")
+        return self
+
 
 class RequirementInterpretation(StrictModel):
     original_text: str = Field(min_length=1, max_length=4000)
     changes: list[RequirementChange] = Field(default_factory=list, max_length=100)
+    faculty_unavailability: list[FacultyUnavailability] = Field(default_factory=list, max_length=100)
     clarification_questions: list[str] = Field(default_factory=list, max_length=10)
     unsupported_requirements: list[str] = Field(default_factory=list, max_length=20)
     requires_review: bool = True
@@ -61,5 +78,10 @@ def validate_catalog_references(result: RequirementInterpretation, catalog: Requ
         if not set(change.preferred_faculty_ids) <= faculty_ids:
             raise ValueError("The interpretation referenced faculty outside the supplied catalog")
         if not set(change.excluded_slot_ids + change.preferred_slot_ids) <= slot_ids:
+            raise ValueError("The interpretation referenced time slots outside the supplied catalog")
+    for absence in result.faculty_unavailability:
+        if absence.faculty_id not in faculty_ids:
+            raise ValueError("The interpretation referenced faculty outside the supplied catalog")
+        if not set(absence.excluded_slot_ids) <= slot_ids:
             raise ValueError("The interpretation referenced time slots outside the supplied catalog")
     return result
