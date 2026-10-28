@@ -87,6 +87,31 @@ export default function RoomAvailabilityFinder({ user, termId }: { user: User; t
   const visibleRooms = useMemo(() => showAllRooms ? rooms : rooms.filter((room) => room.available), [rooms, showAllRooms]);
   const currentSlot = slots.find((slot) => slot.id === slotId);
 
+  function exportCsv() {
+    const escape = (value: unknown) => '"' + String(value ?? "").replaceAll('"', '""') + '"';
+    const fields = ["time", "room_code", "room_name", "room_type", "department", "department_block", "capacity", "equipment", "available"];
+    const time = currentSlot ? slotLabel(currentSlot) : "";
+    const rows = visibleRooms.map((room) => [
+      time,
+      room.code || "",
+      room.name,
+      room.room_type || "",
+      room.department_name || "Shared",
+      room.department_block_no ? "Block " + room.department_block_no : "",
+      room.capacity ?? "",
+      (room.equipment || []).join("; "),
+      room.available ? "Available" : "Occupied",
+    ].map(escape).join(","));
+    const csv = [fields.map(escape).join(","), ...rows].join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "room-availability-" + termId + "-" + slotId + ".csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   return <section className={styles.finder} aria-labelledby="room-finder-title">
     <div className={styles.heading}>
       <div><p className={styles.eyebrow}>ROOM AVAILABILITY</p><h4 id="room-finder-title">Find an open classroom or lab</h4><p>Availability follows the active published timetable and each room’s blocked periods.</p></div>
@@ -94,7 +119,7 @@ export default function RoomAvailabilityFinder({ user, termId }: { user: User; t
     </div>
     <div className={styles.controls}>
       <label><span>Academic time</span><select value={slotId} onChange={(event) => setSlotId(event.target.value)} disabled={loadingSlots || !slots.length}><option value="">{loadingSlots ? "Loading periods…" : "Select a period"}</option>{slots.map((slot) => <option key={slot.id} value={slot.id}>{slotLabel(slot)}</option>)}</select></label>
-      <button type="button" onClick={() => setShowAllRooms((current) => !current)} disabled={!rooms.length}>{showAllRooms ? "Show open rooms only" : "Show all rooms"}</button>
+      <button type="button" onClick={() => setShowAllRooms((current) => !current)} disabled={!rooms.length}>{showAllRooms ? "Show open rooms only" : "Show all rooms"}</button><button type="button" onClick={exportCsv} disabled={!visibleRooms.length}>Export CSV</button>
     </div>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {loadingRooms ? <p className={styles.empty}>Checking room use for this period…</p>
