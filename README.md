@@ -1,6 +1,6 @@
-# Riven Labs · Smart Timetable
+# GLA University · Smart Timetable
 
-Riven Labs is an AI-assisted timetable and faculty coverage workspace. The web client signs users in with Firebase Authentication and sends Firebase ID tokens to the Spring Boot API for all writes and administrative data. It subscribes to audience-filtered published timetable mirrors in Firebase Realtime Database for live schedule updates. Realtime Database rules bind those reads to trusted institution, department, section, faculty, and role claims. The API verifies token claims, scopes records to the user's institution, and uses Firebase Admin SDK for tenant data. The Python AI service is private to the backend.
+GLA University - Mathura is an AI-assisted timetable and faculty workspace. The web client signs users in with Firebase Authentication and sends Firebase ID tokens to the Spring Boot API for writes and administrative data. It subscribes to audience-filtered published timetable mirrors in Firebase Realtime Database for live schedule updates. Realtime Database rules bind those reads to trusted institution, department, section, faculty, and role claims. The API verifies token claims, scopes records to the user's institution, and uses Firebase Admin SDK for tenant data. The Python AI service is private to the backend.
 
 Timetable creation is deterministic: Gemini may interpret a natural-language request into catalog IDs for a user to review, while Google OR-Tools CP-SAT creates the candidate schedule. The service independently validates each result. The backend only stores valid results as drafts; a separate approver and authorized publisher move a version through the lifecycle.
 
@@ -48,6 +48,8 @@ The API stores interpretations under `interpretedRequirements`, asynchronous sol
 5. Run the Spring API from `backend`, loading the root env first: `set -a && source ../.env && set +a && mvn spring-boot:run`.
 6. Run Next.js from `frontend/web` with `pnpm dev`.
 
+For mobile calendar subscriptions, set `CALENDAR_PUBLIC_BASE_URL` in the repository root `.env` to the public HTTPS origin of the Spring API (for example `https://api.example.edu`) before starting the backend. The web page creates private, revocable `.ics` feeds from published timetables. Student feeds contain their assigned section, faculty feeds contain their mapped classes, department-admin feeds contain their department, and timetable-wide roles receive the institution schedule. Local `localhost` feed links work only on the development computer and are not useful on a phone. On iOS, subscribe by opening the link or pasting it into Calendar's subscription flow. For Google Calendar, add the URL using its web interface; the subscribed calendar then syncs to the Android app. Feed links are bearer secrets: anyone who has one can view that account's published timetable until the owner revokes the link.
+
 Firebase emulators are configured for Auth on port 9099 and RTDB on port 9000. Start them from the repository root with `npx -y firebase-tools@latest emulators:start --only auth,database`. For the Spring Admin SDK to use the RTDB emulator, set `FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:9000` in the shell before starting the API and point `FIREBASE_DATABASE_URL` at the emulator database URL. For the web app, set `NEXT_PUBLIC_USE_FIREBASE_EMULATORS=true` in `frontend/web/.env.local` to use the Auth emulator. Never set the emulator flag in production.
 
 Deploy the scoped live-timetable read rules before enabling the web Realtime Database listener: `npx -y firebase-tools@latest deploy --only database --project timetable-5230e`. All client writes remain denied; catalog edits and timetable publishing go through the authenticated backend.
@@ -61,6 +63,9 @@ Deploy the scoped live-timetable read rules before enabling the web Realtime Dat
 - `POST /api/v1/substitutions/recommend` filters unqualified, unavailable, and over-capacity candidates before applying the 40/20/15/15/10 default score.
 - `POST /api/v1/absences` records an absence against a published class; `POST /api/v1/substitutions/assign` revalidates eligibility and workload, assigns approved coverage, updates the realtime mirrors, and records the audit event.
 - `POST /api/v1/ai/policies/query` searches institution-scoped policy chunks and returns grounded answers with source references. This first pass uses lexical retrieval; policy document upload, PDF/DOCX extraction, vector embeddings, and richer ranking are not included yet.
+- `GET/POST /api/v1/calendar/feeds` lists and creates private read-only calendar subscriptions; `DELETE /api/v1/calendar/feeds/{feedId}` revokes one; the `.ics` feed is scoped to the subscriber's current role and uses published timetable versions.
+- `GET /api/v1/attendance/sessions` and `POST /api/v1/attendance/sync` support faculty attendance for mapped lectures. The web app keeps the day's roster and queued marks in IndexedDB for offline capture, then syncs after reconnecting.
+- `GET /api/v1/student/portal` returns a student's own section timetable, profile, and available course/syllabus data for the year calendar.
 
 ## Current implementation boundary
 

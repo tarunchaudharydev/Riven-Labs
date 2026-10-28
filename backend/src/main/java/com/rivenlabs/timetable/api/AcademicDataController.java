@@ -302,7 +302,7 @@ public class AcademicDataController {
                     && blockNo.equals(blockNumber(asMap(entry.getValue()).get("block_no"))));
             if (duplicate) throw new ResponseStatusException(HttpStatus.CONFLICT, "That department block number is already assigned.");
         }
-        for (String key : List.of("qualified_subject_ids", "unavailable_slot_ids", "preferred_slot_ids", "equipment")) {
+        for (String key : List.of("qualified_subject_ids", "unavailable_slot_ids", "preferred_slot_ids", "equipment", "required_equipment", "units")) {
             Object value = record.get(key);
             if (value != null && !(value instanceof Collection<?>)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, key + " must be an array.");

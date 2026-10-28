@@ -16,9 +16,12 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
     private static final Set<String> ROLES = Set.of("SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE", "FACULTY", "ACADEMIC_APPROVER", "STUDENT_VIEWER");
+    private static final Pattern PUBLIC_CALENDAR_FEED = Pattern.compile(
+            "/api/v1/calendar/feeds/[A-Za-z0-9_-]{1,128}/[a-f0-9]{64}/[A-Za-z0-9_-]{40,64}\\.ics");
     private final FirebaseAuth firebaseAuth;
 
     public FirebaseAuthenticationFilter(FirebaseAuth firebaseAuth) {
@@ -27,7 +30,10 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return request.getRequestURI().equals("/api/v1/health") || "OPTIONS".equalsIgnoreCase(request.getMethod());
+        String uri = request.getRequestURI();
+        return uri.equals("/api/v1/health")
+                || ("GET".equalsIgnoreCase(request.getMethod()) && PUBLIC_CALENDAR_FEED.matcher(uri).matches())
+                || "OPTIONS".equalsIgnoreCase(request.getMethod());
     }
 
     @Override
