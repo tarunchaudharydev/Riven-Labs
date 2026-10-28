@@ -137,7 +137,7 @@ export default function UserAdmin({ user }: { user: User }) {
           sectionId: assignment.sectionId.trim() || null,
         }),
       });
-      setNotice(`Updated ${item.email || item.uid}. They may need to sign in again before the new role takes effect.`);
+      setNotice(`Updated ${item.email || item.uid}. Their access will refresh automatically within 25 seconds.`);
       setEdits((old) => { const next = { ...old }; delete next[item.uid]; return next; });
       await loadUsers(pageTokens.at(-1) || "");
       return true;

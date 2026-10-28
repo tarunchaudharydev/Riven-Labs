@@ -152,7 +152,7 @@ public class AdminUsersController {
             database.write(database.tenantPath(principal.institutionId(), "auditLogs", logId), log);
 
             return Map.of("uid", uid, "role", role.isEmpty() ? "UNASSIGNED" : role,
-                    "message", "Role updated. The user may need to sign in again to refresh access.");
+                    "message", "Role updated. Access will refresh automatically within 25 seconds.");
         } catch (FirebaseAuthException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Could not update this Firebase user role.", ex);
         }
