@@ -264,12 +264,24 @@ public class AdminUsersController {
             String departmentId = Objects.toString(record.get("department_id"), "");
             option.put("departmentId", departmentId);
             Object department = departments.get(departmentId);
-            option.put("departmentName", department instanceof Map<?, ?> item
-                    ? Objects.toString(item.get("name"), departmentId) : departmentId);
+            if (department instanceof Map<?, ?> item) {
+                option.put("departmentName", Objects.toString(item.get("name"), departmentId));
+                option.put("departmentBlockNo", departmentBlockNumber(item.get("block_no")));
+                option.put("departmentCode", Objects.toString(item.get("code"), ""));
+            } else {
+                option.put("departmentName", departmentId);
+                option.put("departmentBlockNo", "");
+                option.put("departmentCode", "");
+            }
             options.add(option);
         }
         options.sort(Comparator.comparing(item -> Objects.toString(item.get("name"), ""), String.CASE_INSENSITIVE_ORDER));
         return options;
+    }
+
+    private String departmentBlockNumber(Object value) {
+        String blockNo = Objects.toString(value, "").trim();
+        return blockNo.matches("[0-9]") ? "0" + blockNo : blockNo;
     }
 
     private String facultyCollegeEmail(Map<String, Object> facultyRecords, String facultyId) {
