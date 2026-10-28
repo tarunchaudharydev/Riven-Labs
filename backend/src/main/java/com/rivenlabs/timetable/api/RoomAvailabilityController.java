@@ -111,7 +111,7 @@ public class RoomAvailabilityController {
         rooms.sort(Comparator
                 .comparing((Map<String, Object> room) -> !Boolean.TRUE.equals(room.get("available")))
                 .thenComparing(room -> Objects.toString(room.get("room_type"), ""))
-                .thenComparing(room -> Objects.toString(room.get("code"), room.get("name"))));
+                .thenComparing(room -> Objects.toString(room.get("code"), Objects.toString(room.get("name"), ""))));
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("termId", termId);
