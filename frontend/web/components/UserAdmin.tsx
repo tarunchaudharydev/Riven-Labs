@@ -32,6 +32,25 @@ const ROLE_OPTIONS: { value: ManagedRole; label: string }[] = [
 ];
 
 const CSV_COLUMNS = ["uid", "email", "displayName", "role", "departmentId", "facultyId", "sectionId"] as const;
+const REQUIRED_SCOPE: Partial<Record<ManagedRole, { field: "departmentId" | "facultyId" | "sectionId"; label: string }>> = {
+  DEPARTMENT_ADMIN: { field: "departmentId", label: "Department" },
+  FACULTY: { field: "facultyId", label: "Faculty" },
+  STUDENT_VIEWER: { field: "sectionId", label: "Section" },
+};
+
+function assignmentScopeError(assignment: Assignment) {
+  const required = REQUIRED_SCOPE[assignment.role];
+  if (!required || assignment[required.field].trim()) return "";
+  return `${required.label} ID is required for this role. Create it under Academic data, then enter its exact ID here.`;
+}
+
+function roleAssignmentError(cause: unknown, assignment: Assignment) {
+  const message = cause instanceof Error ? cause.message : "Role assignment failed.";
+  if (!/^(bad request|request failed \(400\))$/i.test(message.trim())) return message;
+  const required = REQUIRED_SCOPE[assignment.role];
+  if (required) return `${required.label} ID was not accepted. Check that it exactly matches an existing record under Academic data.`;
+  return "The role or scope values were not accepted. Check them and try again.";
+}
 
 function escapeCsv(value: unknown) {
   const text = String(value ?? "");
@@ -126,6 +145,8 @@ export default function UserAdmin({ user }: { user: User }) {
   }
 
   async function saveAssignment(item: AdminUser, assignment = assignmentFor(item)) {
+    const scopeError = assignmentScopeError(assignment);
+    if (scopeError) { setError(scopeError); setNotice(""); return false; }
     setBusyUid(item.uid); setError(""); setNotice("");
     try {
       await backendRequest(user, `/api/v1/admin/users/${encodeURIComponent(item.uid)}/role`, {
@@ -142,7 +163,7 @@ export default function UserAdmin({ user }: { user: User }) {
       await loadUsers(pageTokens.at(-1) || "");
       return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Could not update ${item.email || item.uid}.`);
+      setError(roleAssignmentError(cause, assignment));
       return false;
     } finally { setBusyUid(""); }
   }
@@ -186,13 +207,21 @@ export default function UserAdmin({ user }: { user: User }) {
         const role = column(record, "role").toUpperCase() as ManagedRole;
         if (!uid) { failures.push(`Row ${index + 2}: missing uid`); continue; }
         if (!ROLE_OPTIONS.some((option) => option.value === role)) { failures.push(`Row ${index + 2}: unsupported role`); continue; }
+        const assignment = {
+          role,
+          departmentId: column(record, "departmentId"),
+          facultyId: column(record, "facultyId"),
+          sectionId: column(record, "sectionId"),
+        };
+        const scopeError = assignmentScopeError(assignment);
+        if (scopeError) { failures.push(`Row ${index + 2}: ${scopeError}`); continue; }
         try {
           await backendRequest(user, `/api/v1/admin/users/${encodeURIComponent(uid)}/role`, {
             method: "PUT",
-            body: JSON.stringify({ role, departmentId: column(record, "departmentId") || null, facultyId: column(record, "facultyId") || null, sectionId: column(record, "sectionId") || null }),
+            body: JSON.stringify({ role, departmentId: assignment.departmentId || null, facultyId: assignment.facultyId || null, sectionId: assignment.sectionId || null }),
           });
           saved += 1;
-        } catch (cause) { failures.push(`Row ${index + 2} (${uid}): ${cause instanceof Error ? cause.message : "failed"}`); }
+        } catch (cause) { failures.push(`Row ${index + 2} (${uid}): ${roleAssignmentError(cause, assignment)}`); }
       }
       await loadUsers(pageTokens.at(-1) || "");
       setNotice(`Imported ${saved} role assignment${saved === 1 ? "" : "s"}.${failures.length ? ` ${failures.length} row${failures.length === 1 ? "" : "s"} need attention: ${failures.slice(0, 4).join("; ")}` : ""}`);
@@ -209,6 +238,7 @@ export default function UserAdmin({ user }: { user: User }) {
   return <section className={`panel user-admin-panel ${styles.root}`} id="user-admin" aria-labelledby="user-admin-title">
     <div className="panel-heading"><div><p className="eyebrow">ACCESS CONTROL</p><h3 id="user-admin-title">Users &amp; roles</h3></div><span className="queue-count">Super admin</span></div>
     <p className="user-admin-intro">Google sign-ins appear here automatically. Assign a role and the matching academic scope to grant timetable access.</p>
+    <p className="user-admin-intro">Department Admin needs a Department ID, Teacher needs a Faculty ID, and Student needs a Section ID. Use IDs already listed under Academic data.</p>
     {error && <div className="alert alert-error" role="alert"><strong>Couldn&apos;t complete this action</strong><span>{error}</span><button onClick={() => setError("")}>Dismiss</button></div>}
     {notice && <div className="alert alert-success" role="status"><strong>Done</strong><span>{notice}</span><button onClick={() => setNotice("")}>Dismiss</button></div>}
     <div className="user-admin-toolbar"><label className="user-search-label" htmlFor="user-search">Search users<input id="user-search" className="text-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, email or UID" /></label><div className="user-admin-actions"><button className="button button-light" onClick={downloadTemplate} type="button">CSV template</button><label className={`button button-light import-button ${importing ? "disabled" : ""}`}>Import CSV<input ref={fileInput} type="file" accept=".csv,text/csv" hidden disabled={importing} onChange={(event) => void importCsv(event.target.files?.[0])} /></label><button className="button button-light" onClick={() => void exportAllUsers()} type="button" disabled={loading}>Export CSV</button><button className="button button-primary" onClick={() => void loadUsers(pageTokens.at(-1) || "")} type="button" disabled={loading}>{loading ? "Loading…" : "Refresh"}</button></div></div>
@@ -220,7 +250,7 @@ export default function UserAdmin({ user }: { user: User }) {
         return <tr key={item.uid}>
           <td><div className="user-identity"><span className="user-profile-avatar">{(item.displayName || item.email || "U").slice(0, 1).toUpperCase()}{item.photoUrl && <img src={item.photoUrl} alt="" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} />}</span><div><strong>{item.displayName || "Google user"}</strong><small>{item.email || "No email"}</small><span className="user-provider-badge">{provider} account</span><code>{item.uid}</code></div></div></td>
           <td><select aria-label={`Role for ${item.email || item.uid}`} className="user-role-select" value={assignment.role} onChange={(event) => patchAssignment(item.uid, { role: event.target.value as ManagedRole })}>{ROLE_OPTIONS.map((option) => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}</select></td>
-          {(["departmentId", "facultyId", "sectionId"] as const).map((key) => <td key={key}><input aria-label={`${key} for ${item.email || item.uid}`} className="user-scope-input" value={assignment[key]} onChange={(event) => patchAssignment(item.uid, { [key]: event.target.value })} placeholder="Not set" /></td>)}
+          {(["departmentId", "facultyId", "sectionId"] as const).map((key) => <td key={key}><input aria-label={`${key} for ${item.email || item.uid}`} className="user-scope-input" value={assignment[key]} onChange={(event) => patchAssignment(item.uid, { [key]: event.target.value })} placeholder={REQUIRED_SCOPE[assignment.role]?.field === key ? "Required ID" : "Not set"} /></td>)}
           <td><span className={`user-access-pill ${item.role ? "assigned" : "pending"}`}>{item.disabled ? "Disabled" : item.role ? "Assigned" : "Pending"}</span></td>
           <td><button className="button button-light user-save-button" type="button" disabled={busyUid === item.uid || !changed} onClick={() => void saveAssignment(item)}>{busyUid === item.uid ? "Saving…" : "Save"}</button></td>
         </tr>;
