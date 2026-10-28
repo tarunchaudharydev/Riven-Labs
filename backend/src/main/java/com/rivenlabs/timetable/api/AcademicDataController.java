@@ -105,7 +105,8 @@ public class AcademicDataController {
         }
         if (!shifts.isEmpty()) {
             for (Map<String, Object> section : sections) {
-                String shiftId = requiredText(section, "shift_id");
+                requiredText(section, "shift_id");
+                String shiftId = Objects.toString(section.get("shift_id"), "");
                 if (!shiftsById.containsKey(shiftId)) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each section must use one of the configured shifts.");
                 }

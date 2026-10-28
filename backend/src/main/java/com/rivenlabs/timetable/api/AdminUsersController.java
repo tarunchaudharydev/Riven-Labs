@@ -61,7 +61,7 @@ public class AdminUsersController {
             String nextPageToken;
             if (query.isEmpty()) {
                 ListUsersPage page = firebaseAuth.listUsers(pageToken, pageSize);
-                sourceUsers.addAll(page.getValues());
+                page.getValues().forEach(sourceUsers::add);
                 nextPageToken = page.getNextPageToken();
             } else {
                 List<UserRecord> matchingUsers = new ArrayList<>();
