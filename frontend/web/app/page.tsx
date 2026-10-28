@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { getIdTokenResult, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
 import { onValue, ref } from "firebase/database";
 import type { User } from "firebase/auth";
 import { backendRequest } from "../lib/backend";
 import { getFirebaseAuth, getRealtimeDatabase } from "../lib/firebase";
 import AcademicWorkspace from "../components/AcademicWorkspace";
+import UserAdmin from "../components/UserAdmin";
+import accessAdminStyles from "../components/access-admin.module.css";
 
 type DashboardData = {
   institutionName: string;
@@ -48,6 +50,8 @@ function dayIndex(day: string) { const index = ["MON", "TUE", "WED", "THU", "FRI
 export default function Home() {
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [accessChecked, setAccessChecked] = useState(false);
+  const [accessPending, setAccessPending] = useState(false);
   const [authError, setAuthError] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -72,7 +76,7 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      return onAuthStateChanged(getFirebaseAuth(), (current) => { setUser(current); setData(null); setAuthReady(true); setAuthError(""); }, (error) => { setAuthError(error.message); setAuthReady(true); });
+      return onAuthStateChanged(getFirebaseAuth(), (current) => { setUser(current); setData(null); setAccessPending(false); setAccessChecked(!current); setAuthReady(true); setAuthError(""); }, (error) => { setAuthError(error.message); setAuthReady(true); });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Firebase could not be initialized.";
       queueMicrotask(() => { setAuthError(message); setAuthReady(true); });
@@ -82,12 +86,30 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    backendRequest<DashboardData>(user, "/api/v1/dashboard").then((result) => {
-      if (cancelled) return;
-      setData(result); setLoadError("");
-      setSelectedTerm((current) => current || Object.keys(result.terms || {})[0] || "");
-    }).catch((error: unknown) => { if (!cancelled) setLoadError(error instanceof Error ? error.message : "The timetable backend could not be reached."); });
-    return () => { cancelled = true; };
+    let pending = false;
+    const checkAccess = async (refreshToken = false) => {
+      try {
+        if (refreshToken) await user.getIdToken(true);
+        const result = await backendRequest<DashboardData>(user, "/api/v1/dashboard");
+        if (cancelled) return;
+        pending = false;
+        setData(result); setLoadError(""); setAccessPending(false); setAccessChecked(true);
+        setSelectedTerm((current) => current || Object.keys(result.terms || {})[0] || "");
+      } catch (error: unknown) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "The timetable backend could not be reached.";
+        const missingRole = /not provisioned for timetable access|missing its section or faculty assignment/i.test(message);
+        if (missingRole || pending) {
+          pending = true;
+          setData(null); setLoadError(""); setAccessPending(true); setAccessChecked(true);
+        } else {
+          setLoadError(message); setAccessChecked(true);
+        }
+      }
+    };
+    void checkAccess();
+    const timer = window.setInterval(() => { if (pending) void checkAccess(true); }, 25_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [user]);
 
   useEffect(() => {
@@ -171,6 +193,15 @@ export default function Home() {
     catch (error) { setAuthError(error instanceof Error ? error.message : "Sign-in failed. Check your email and password."); }
     finally { setSigningIn(false); }
   }
+  async function submitGoogle() {
+    setSigningIn(true); setAuthError("");
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      await signInWithPopup(getFirebaseAuth(), provider);
+    } catch (error) { setAuthError(error instanceof Error ? error.message : "Google sign-in failed. Please try again."); }
+    finally { setSigningIn(false); }
+  }
   async function parseRequirements(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!user || !selectedTerm || !requirementText.trim()) return;
@@ -240,19 +271,22 @@ export default function Home() {
   }
 
   if (!authReady) return <LoadingScreen />;
-  if (!user) return <LoginScreen email={email} password={password} setEmail={setEmail} setPassword={setPassword} onSubmit={submitLogin} busy={signingIn} error={authError} />;
+  if (!user) return <LoginScreen email={email} password={password} setEmail={setEmail} setPassword={setPassword} onSubmit={submitLogin} onGoogleSignIn={submitGoogle} busy={signingIn} error={authError} />;
+  if (!accessChecked) return <LoadingScreen />;
+  if (accessPending) return <AccessPendingScreen email={user.email || ""} onSignOut={() => signOut(getFirebaseAuth())} />;
   const displayName = user.displayName || user.email?.split("@")[0] || "Administrator";
   const roleName = data?.role?.replaceAll("_", " ").toLowerCase() || "checking access";
   const currentJob = job?.jobId ? job : null;
   const canSchedule = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE"].includes(data?.role || "");
   const canReview = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE", "ACADEMIC_APPROVER"].includes(data?.role || "");
   const canManageCoverage = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE", "ACADEMIC_APPROVER"].includes(data?.role || "");
+  const canManageUsers = data?.role === "SUPER_ADMIN";
 
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#overview" aria-label="Riven Labs home"><span className="brand-mark"><span /></span><span><strong>riven</strong><small>ACADEMIC SYSTEMS</small></span></a>
       <div className="side-label">WORKSPACE</div>
-      <nav className="side-nav" aria-label="Main navigation"><a className="nav-link active" href="#overview"><Icon name="grid" />Overview</a><a className="nav-link" href="#timetable"><Icon name="calendar" />Timetable</a><a className="nav-link" href="#academic-data"><Icon name="users" />Academic data</a><a className="nav-link" href="#assistant"><Icon name="spark" />AI assistant<span className="nav-pill">NEW</span></a><a className="nav-link" href="#policies"><Icon name="book" />Policy library</a></nav>
+      <nav className="side-nav" aria-label="Main navigation"><a className="nav-link active" href="#overview"><Icon name="grid" />Overview</a><a className="nav-link" href="#timetable"><Icon name="calendar" />Timetable</a><a className="nav-link" href="#academic-data"><Icon name="users" />Academic data</a><a className="nav-link" href="#assistant"><Icon name="spark" />AI assistant<span className="nav-pill">NEW</span></a><a className="nav-link" href="#policies"><Icon name="book" />Policy library</a>{canManageUsers && <a className="nav-link" href="#user-admin"><Icon name="users" />Users &amp; roles</a>}</nav>
       <div className="sidebar-bottom"><div className="sidebar-help"><div className="help-icon"><Icon name="spark" size={16} /></div><strong>Need a hand?</strong><p>Ask the policy assistant about your institution&apos;s scheduling rules.</p><a href="#policies">Open assistant <Icon name="arrow" size={14} /></a></div><button className="profile-row" onClick={() => signOut(getFirebaseAuth())} aria-label="Sign out"><span className="avatar">{initials(user)}</span><span className="profile-copy"><strong>{displayName}</strong><small>{roleName}</small></span><Icon name="logout" size={16} /></button></div>
     </aside>
 
@@ -266,6 +300,8 @@ export default function Home() {
         <section className="hero-card"><div className="hero-copy"><div className="hero-kicker"><span className="hero-dot" /> YOUR SMART TIMETABLE HUB</div><h2>Make every period<br />count.</h2><p>Plan a clearer week with data-backed scheduling and faculty coverage, all in one place.</p><a href="#assistant" className="hero-link">Plan with AI <Icon name="arrow" size={16} /></a></div><div className="hero-art" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="hero-sun" /><div className="hero-grid"><span /><span /><span /><span /><span /><span /><span /><span /><span /></div><div className="float-card float-card-top"><i className="float-dot green" /><span><b>Scheduling engine</b><small>Constraint validated</small></span><Icon name="check" size={15} /></div><div className="float-card float-card-bottom"><span className="mini-spark">✦</span><span><b>Smarter planning</b><small>Powered by your data</small></span></div><div className="art-ring" /></div></section>
 
         <section className="metrics-grid" id="academics" aria-label="Academic data summary"><MetricCard title="Faculty members" value={data?.counts.faculty} icon="users" tone="mint" detail="In your academic data" /><MetricCard title="Subjects" value={data?.counts.subjects} icon="book" tone="lavender" detail="Available to schedule" /><MetricCard title="Student sections" value={data?.counts.sections} icon="grid" tone="peach" detail="Across departments" /><MetricCard title="Timetable drafts" value={data?.counts.drafts} icon="calendar" tone="blue" detail="Ready for review" /></section>
+
+        {canManageUsers && <UserAdmin user={user} />}
 
         {canSchedule && <AcademicWorkspace user={user} role={data?.role || ""} onSaved={() => { void backendRequest<DashboardData>(user, "/api/v1/dashboard").then(setData).catch((error) => setLoadError(error.message)); }} />}
 
@@ -333,6 +369,10 @@ function TimetableBoard({ entries, termId, canRecommend, canAssign, busy, substi
 function EmptyState({ icon, title, body }: { icon: string; title: string; body: string }) { return <div className="empty-state"><span className="empty-icon"><Icon name={icon} size={21} /></span><strong>{title}</strong><p>{body}</p></div>; }
 function EmptyLine({ text }: { text: string }) { return <p className="empty-line">{text}</p>; }
 function LoadingScreen() { return <div className="auth-screen"><div className="loading-mark"><span className="brand-mark"><span /></span><p>Loading your workspace…</p></div></div>; }
-function LoginScreen({ email, password, setEmail, setPassword, onSubmit, busy, error }: { email: string; password: string; setEmail: (value: string) => void; setPassword: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; busy: boolean; error: string }) {
-  return <main className="auth-screen"><div className="auth-aside"><a className="brand auth-brand" href="#"><span className="brand-mark"><span /></span><span><strong>riven</strong><small>ACADEMIC SYSTEMS</small></span></a><div className="auth-aside-copy"><span className="hero-kicker"><span className="hero-dot" /> SMARTER ACADEMIC PLANNING</span><h1>Make room for<br />a better week.</h1><p>A clearer way to plan classes, protect faculty time, and find the right cover when plans change.</p><div className="auth-art"><div className="art-ring" /><div className="hero-sun" /><div className="auth-art-grid"><span /><span /><span /><span /><span /><span /><span /><span /><span /></div></div></div><div className="auth-aside-footer">Riven Labs · Timetable management</div></div><div className="auth-main"><form className="login-card" onSubmit={onSubmit}><div className="login-mark"><Icon name="grid" size={20} /></div><p className="eyebrow">WELCOME BACK</p><h2>Sign in to Riven</h2><p className="login-intro">Use your institution account to open your workspace.</p>{error && <div className="login-error">{error}</div>}<label htmlFor="email">Work email</label><input id="email" className="text-input" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@institution.edu" /><label htmlFor="password">Password</label><input id="password" className="text-input" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" /><button className="button button-primary login-button" disabled={busy}>{busy ? "Signing in…" : "Continue to workspace"}<Icon name="arrow" size={15} /></button><p className="login-footnote">Access is provisioned by your timetable administrator.</p></form></div></main>;
+function AccessPendingScreen({ email, onSignOut }: { email: string; onSignOut: () => void }) {
+  return <main className={`access-pending-screen ${accessAdminStyles.root}`}><section className="access-pending-card" aria-labelledby="access-pending-title"><a className="brand access-pending-brand" href="#"><span className="brand-mark"><span /></span><span><strong>riven</strong><small>ACADEMIC SYSTEMS</small></span></a><div className="access-pending-icon"><Icon name="users" size={22} /></div><p className="eyebrow">ROLE NOT ASSIGNED</p><h1 id="access-pending-title">Request your class advisor to assign a role, or request the admin to check your role.</h1><p className="access-pending-email">Signed in as {email}</p><button className="button button-light" type="button" onClick={onSignOut}>Sign out</button></section></main>;
 }
+function LoginScreen({ email, password, setEmail, setPassword, onSubmit, onGoogleSignIn, busy, error }: { email: string; password: string; setEmail: (value: string) => void; setPassword: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onGoogleSignIn: () => void; busy: boolean; error: string }) {
+  return <main className={`auth-screen ${accessAdminStyles.root}`}><div className="auth-aside"><a className="brand auth-brand" href="#"><span className="brand-mark"><span /></span><span><strong>riven</strong><small>ACADEMIC SYSTEMS</small></span></a><div className="auth-aside-copy"><span className="hero-kicker"><span className="hero-dot" /> SMARTER ACADEMIC PLANNING</span><h1>Make room for<br />a better week.</h1><p>A clearer way to plan classes, protect faculty time, and find the right cover when plans change.</p><div className="auth-art"><div className="art-ring" /><div className="hero-sun" /><div className="auth-art-grid"><span /><span /><span /><span /><span /><span /><span /><span /><span /></div></div></div><div className="auth-aside-footer">Riven Labs · Timetable management</div></div><div className="auth-main"><section className="login-card"><div className="login-mark"><Icon name="grid" size={20} /></div><p className="eyebrow">WELCOME TO RIVEN</p><h2>Sign in to Riven</h2><p className="login-intro">Continue with Google. New accounts are created automatically and can access the timetable after an administrator assigns a role.</p>{error && <div className="login-error" role="alert">{error}</div>}<button className="google-login-button" type="button" onClick={onGoogleSignIn} disabled={busy}><GoogleMark />{busy ? "Connecting…" : "Continue with Google"}</button><div className="login-divider"><span>or sign in with email</span></div><form onSubmit={onSubmit}><label htmlFor="email">Work email</label><input id="email" className="text-input" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@institution.edu" /><label htmlFor="password">Password</label><input id="password" className="text-input" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" /><button className="button button-primary login-button" disabled={busy}>{busy ? "Signing in…" : "Continue with email"}<Icon name="arrow" size={15} /></button></form><p className="login-footnote">Access is managed by your class advisor or timetable administrator.</p></section></div></main>;
+}
+function GoogleMark() { return <svg aria-hidden="true" width="17" height="17" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94a11.1 11.1 0 0 1-4.8 7.27l7.75 6.01c4.53-4.18 7.09-10.34 7.09-17.75z"/><path fill="#FBBC05" d="M10.53 28.59a14.4 14.4 0 0 1 0-9.18l-7.98-6.19a24 24 0 0 0 0 21.56z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.78l-7.75-6.01c-2.15 1.45-4.9 2.3-8.15 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>; }

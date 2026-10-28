@@ -1,0 +1,61 @@
+.root:global(.user-admin-panel){margin:0 0 17px;scroll-margin-top:82px}
+.root :global(.user-admin-intro){margin:10px 0 14px;color:#7d8981;font-size:10px;line-height:1.6}
+.root :global(.user-admin-toolbar){display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px}
+.root :global(.user-search-label){display:grid;gap:5px;min-width:220px;color:#68766e;font-size:9px;font-weight:700}
+.root :global(.user-search-label .text-input){height:33px;font-size:10px}
+.root :global(.user-admin-actions){display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}
+.root :global(.user-admin-actions .button){height:33px;font-size:9px}
+.root :global(.import-button){position:relative;overflow:hidden}
+.root :global(.import-button input){position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.root :global(.import-button.disabled){opacity:.55;pointer-events:none}
+.root :global(.user-table-scroll){width:100%;overflow:auto;border:1px solid #e9efea;border-radius:9px}
+.root :global(.user-table){width:100%;min-width:1030px;border-collapse:separate;border-spacing:0;background:#fff}
+.root :global(.user-table th){height:35px;padding:8px 9px;background:#f7f9f7;color:#758179;font-size:9px;font-weight:700;text-align:left;border-bottom:1px solid #e9efea;white-space:nowrap}
+.root :global(.user-table td){padding:9px;border-bottom:1px solid #eff2ef;vertical-align:middle}
+.root :global(.user-table tbody tr:last-child td){border-bottom:0}
+.root :global(.user-identity){display:flex;align-items:center;gap:9px;min-width:245px}
+.root :global(.user-identity > div){display:grid;gap:3px;min-width:0}
+.root :global(.user-identity strong){max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:#34463b}
+.root :global(.user-identity small){font-size:9px;color:#7f8b83;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.root :global(.user-identity code){font:8px/1.4 ui-monospace,SFMono-Regular,monospace;color:#9aa39d;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.root :global(.user-profile-avatar){position:relative;display:grid;place-items:center;width:37px;height:37px;flex:none;overflow:hidden;border-radius:50%;background:#e6f0e8;color:#3e7654;font-size:12px;font-weight:700}
+.root :global(.user-profile-avatar img){position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.root :global(.user-provider-badge){justify-self:start;padding:3px 6px;border-radius:10px;background:#f1f4f1;color:#728078;font-size:8px}
+.root :global(.user-role-select),.root :global(.user-scope-input){height:31px;width:130px;padding:0 7px;border:1px solid #e1e8e2;border-radius:6px;background:#fff;color:#44534a;font-size:9px;outline:none}
+.root :global(.user-scope-input){width:105px}
+.root :global(.user-role-select:focus),.root :global(.user-scope-input:focus){border-color:#86b493;box-shadow:0 0 0 2px rgba(99,157,116,.1)}
+.root :global(.user-access-pill){display:inline-flex;padding:5px 7px;border-radius:12px;background:#f5f2ed;color:#8b7047;font-size:8px;font-weight:700;white-space:nowrap}
+.root :global(.user-access-pill.assigned){background:#edf6ef;color:#39815c}
+.root :global(.user-access-pill.pending){background:#f8f1e8;color:#956c35}
+.root :global(.user-save-button){height:29px;font-size:9px}
+.root :global(.user-table-empty){height:68px;text-align:center;color:#89948e;font-size:10px}
+.root :global(.user-admin-footer){display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;color:#89948e;font-size:9px}
+.root :global(.user-admin-footer > div){display:flex;gap:6px}
+.root :global(.user-admin-footer .button){height:29px;font-size:9px}
+.root :global(.alert-success){color:#3f7050;background:#eff7ef;border:1px solid #dcebdd}
+.root :global(.user-admin-actions .button:disabled){opacity:.55}
+
+.root :global(.google-login-button){height:42px;width:100%;display:flex;align-items:center;justify-content:center;gap:10px;border:1px solid #dfe5e1;border-radius:8px;background:#fff;color:#35443a;font-size:11px;font-weight:700;box-shadow:0 1px 2px rgba(25,46,34,.04)}
+.root :global(.google-login-button:hover:not(:disabled)){background:#f8faf8;border-color:#cbd8ce}
+.root :global(.google-login-button:disabled){opacity:.55;cursor:wait}
+.root :global(.login-divider){display:flex;align-items:center;gap:9px;margin:15px 0;color:#9aa39e;font-size:9px}
+.root :global(.login-divider:before),.root :global(.login-divider:after){content:"";height:1px;background:#e7ece8;flex:1}
+.root :global(.login-card > form){display:flex;flex-direction:column}
+.root :global(.login-card > form .text-input){margin-bottom:13px}
+.root:global(.access-pending-screen){min-height:100vh;display:grid;place-items:center;padding:24px;background:#f7f8f6}
+.root :global(.access-pending-card){width:min(100%,480px);display:flex;align-items:center;flex-direction:column;text-align:center;padding:38px 34px 32px;border:1px solid #e6ece7;border-radius:16px;background:#fff;box-shadow:0 16px 50px rgba(30,53,39,.07)}
+.root :global(.access-pending-brand){padding:0;margin-bottom:35px}
+.root :global(.access-pending-icon){display:grid;place-items:center;width:48px;height:48px;margin-bottom:20px;border-radius:15px;background:#edf5f0;color:#327652}
+.root :global(.access-pending-card .eyebrow){margin-bottom:9px}
+.root :global(.access-pending-card h1){margin:0;font:500 25px/1.3 var(--serif);letter-spacing:-.3px;color:#20372a}
+.root :global(.access-pending-email){margin:12px 0 20px;color:#839087;font-size:10px}
+.root :global(.access-pending-card .button){height:33px;font-size:9px}
+
+@media(max-width:760px){
+  .root :global(.user-admin-toolbar){align-items:stretch;flex-direction:column}
+  .root :global(.user-search-label){min-width:0}
+  .root :global(.user-admin-actions){justify-content:flex-start}
+  .root :global(.user-admin-footer){align-items:flex-start;flex-direction:column}
+  .root :global(.access-pending-card){padding:30px 22px}
+  .root :global(.access-pending-card h1){font-size:22px}
+}
