@@ -2,6 +2,7 @@ package com.rivenlabs.timetable.api;
 
 import com.rivenlabs.timetable.data.RealtimeDatabaseStore;
 import com.rivenlabs.timetable.security.AppPrincipal;
+import com.rivenlabs.timetable.service.TimetableDirectoryEnricher;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,7 +18,12 @@ import java.util.Objects;
 @RequestMapping("/api/v1/dashboard")
 public class DashboardController {
     private final RealtimeDatabaseStore database;
-    public DashboardController(RealtimeDatabaseStore database) { this.database = database; }
+    private final TimetableDirectoryEnricher directory;
+
+    public DashboardController(RealtimeDatabaseStore database, TimetableDirectoryEnricher directory) {
+        this.database = database;
+        this.directory = directory;
+    }
 
     @GetMapping
     public Map<String, Object> dashboard(@AuthenticationPrincipal AppPrincipal principal) {
@@ -82,7 +88,7 @@ public class DashboardController {
             String draftId = Objects.toString(pointer.get("draftId"), "");
             if (draftId.isBlank()) continue;
             Map<String, Object> draft = database.readMap(database.tenantPath(principal.institutionId(), "publishedTimetables", item.getKey(), "versions", draftId));
-            List<Map<String, Object>> entries = withSubstitutions(root, item.getKey(), maps(draft.get("entries"))).stream().filter(entry -> {
+            List<Map<String, Object>> entries = directory.enrich(principal.institutionId(), item.getKey(), maps(draft.get("entries")), true).stream().filter(entry -> {
                 if ("STUDENT_VIEWER".equals(principal.role())) return principal.sectionId().equals(entry.get("section_id"));
                 if ("FACULTY".equals(principal.role())) return principal.facultyId().equals(entry.get("faculty_id"));
                 if ("DEPARTMENT_ADMIN".equals(principal.role()) && principal.departmentId() != null) return principal.departmentId().equals(entry.get("department_id"));
@@ -114,22 +120,5 @@ public class DashboardController {
         return count;
     }
 
-    private List<Map<String, Object>> withSubstitutions(String root, String termId, List<Map<String, Object>> entries) {
-        Map<String, Object> overlays = database.readMap(root + "/activeSubstitutions/" + termId);
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (Map<String, Object> entry : entries) {
-            Map<String, Object> copy = new LinkedHashMap<>(entry);
-            String key = Objects.toString(copy.get("requirement_id"), "") + "_"
-                    + Objects.toString(copy.get("day"), "").toUpperCase(java.util.Locale.ROOT) + "_"
-                    + Objects.toString(copy.get("period"), "");
-            Object raw = overlays.get(key);
-            if (raw instanceof Map<?, ?> overlay) {
-                copy.put("faculty_id", overlay.get("substituteFacultyId"));
-                copy.put("faculty_name", overlay.get("substituteFacultyName"));
-                copy.put("substitute", true);
-            }
-            result.add(copy);
-        }
-        return result;
-    }
+
 }

@@ -4,6 +4,7 @@ import com.rivenlabs.timetable.data.RealtimeDatabaseStore;
 import com.rivenlabs.timetable.security.AppPrincipal;
 import com.rivenlabs.timetable.security.RoleGuard;
 import com.rivenlabs.timetable.service.SchedulingInputService;
+import com.rivenlabs.timetable.service.TimetableDirectoryEnricher;
 import com.rivenlabs.timetable.service.TimetableGenerationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -22,11 +23,14 @@ public class TimetableController {
     private final RealtimeDatabaseStore database;
     private final SchedulingInputService inputs;
     private final TimetableGenerationService generation;
+    private final TimetableDirectoryEnricher directory;
     private final RoleGuard roles;
 
     public TimetableController(RealtimeDatabaseStore database, SchedulingInputService inputs,
-                               TimetableGenerationService generation, RoleGuard roles) {
-        this.database = database; this.inputs = inputs; this.generation = generation; this.roles = roles;
+                               TimetableGenerationService generation, TimetableDirectoryEnricher directory,
+                               RoleGuard roles) {
+        this.database = database; this.inputs = inputs; this.generation = generation;
+        this.directory = directory; this.roles = roles;
     }
 
     @PostMapping("/timetables/generate")
@@ -123,11 +127,13 @@ public class TimetableController {
                 snapshot.put("entries", mergedEntries);
             }
         }
+        List<Map<String, Object>> nextEntries = directory.enrich(
+                principal.institutionId(), termId, maps(snapshot.get("entries")), false);
+        snapshot.put("entries", nextEntries);
         Map<String, Object> changes = new LinkedHashMap<>();
         String publishedPath = database.tenantPath(principal.institutionId(), "publishedTimetables", termId).substring(root.length() + 1);
         changes.put(publishedPath + "/versions/" + draftId, snapshot);
         changes.put(publishedPath + "/active", Map.of("draftId", draftId, "publishedAt", snapshot.get("publishedAt")));
-        List<Map<String, Object>> nextEntries = maps(snapshot.get("entries"));
         Map<String, Object> previousLive = database.readMap(database.tenantPath(principal.institutionId(), "liveTimetableSnapshots", termId));
         changes.put("liveTimetableSnapshots/" + termId, liveSnapshot(snapshot, nextEntries));
         addLiveAudienceCopies(changes, termId, snapshot, nextEntries, maps(previousLive.get("entries")));
