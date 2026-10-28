@@ -25,9 +25,13 @@ Catalog:
         response = await self.client.aio.models.generate_content(
             model=self.model,
             contents=f"{prompt}\n\nUser request:\n{user_input}",
-            config={"response_mime_type": "application/json", "response_schema": RequirementInterpretation},
+            config={
+                "response_mime_type": "application/json",
+                # Pass JSON Schema directly; the typed response_schema path
+                # serializes additionalProperties as unsupported snake_case.
+                "response_json_schema": RequirementInterpretation.model_json_schema(),
+            },
         )
-        parsed = response.parsed
-        if not isinstance(parsed, RequirementInterpretation):
-            parsed = RequirementInterpretation.model_validate(parsed)
-        return parsed
+        if not response.text:
+            raise ValueError("Gemini returned an empty requirement interpretation")
+        return RequirementInterpretation.model_validate_json(response.text)
