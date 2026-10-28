@@ -22,7 +22,22 @@ type AdminUser = {
   studentRollNo?: string | null;
 };
 type FacultyOption = { id: string; name: string; email: string; departmentId?: string; departmentName?: string };
-type SectionOption = { id: string; name: string; departmentId?: string; departmentName?: string; shiftId?: string };
+type SectionOption = { id: string; name: string; departmentId?: string; departmentName?: string; departmentBlockNo?: string; departmentCode?: string; shiftId?: string };
+
+function normalizeDepartmentFilter(value: string | undefined) {
+  const normalized = (value || "").trim().toLocaleLowerCase();
+  return /^\d$/.test(normalized) && normalized !== "0" ? `0${normalized}` : normalized;
+}
+
+function matchesSectionDepartment(section: SectionOption, departmentFilter: string) {
+  const query = normalizeDepartmentFilter(departmentFilter);
+  if (!query) return false;
+  return [section.departmentId, section.departmentBlockNo, section.departmentCode, section.departmentName]
+    .some((value) => {
+      const candidate = normalizeDepartmentFilter(value);
+      return Boolean(candidate) && candidate.startsWith(query);
+    });
+}
 type UsersPage = { users: AdminUser[]; facultyOptions?: FacultyOption[]; sectionOptions?: SectionOption[]; nextPageToken?: string | null };
 type Assignment = { role: ManagedRole; departmentId: string; facultyId: string; sectionId: string; studentCollegeEmail: string; studentRollNo: string };
 
@@ -177,6 +192,10 @@ export default function UserAdmin({ user }: { user: User }) {
       else if (patch.role === "DEPARTMENT_ADMIN" || patch.role === "TIMETABLE_INCHARGE" || patch.role === "ACADEMIC_APPROVER") { assignment.facultyId = ""; assignment.sectionId = ""; assignment.studentRollNo = ""; }
       else { assignment.departmentId = ""; assignment.facultyId = ""; assignment.sectionId = ""; assignment.studentRollNo = ""; }
     }
+    if (patch.departmentId !== undefined && assignment.role === "STUDENT_VIEWER" && assignment.sectionId && assignment.departmentId.trim()) {
+      const selectedSection = sectionOptions.find((option) => option.id === assignment.sectionId);
+      if (!selectedSection || !matchesSectionDepartment(selectedSection, assignment.departmentId)) assignment.sectionId = "";
+    }
     setEdits((old) => ({ ...old, [uid]: assignment }));
   }
 
@@ -287,6 +306,10 @@ export default function UserAdmin({ user }: { user: User }) {
         const assignment = assignmentFor(item);
         const changed = Boolean(edits[item.uid]);
         const provider = item.providers?.includes("google.com") ? "Google" : item.providers?.[0]?.replace(".com", "") || "Firebase";
+        const departmentFilter = assignment.departmentId.trim();
+        const matchingSectionOptions = departmentFilter
+          ? sectionOptions.filter((option) => matchesSectionDepartment(option, departmentFilter))
+          : sectionOptions.filter((option) => option.id === assignment.sectionId);
         return <tr key={item.uid}>
           <td><div className="user-identity"><span className="user-profile-avatar">{(item.displayName || item.email || "U").slice(0, 1).toUpperCase()}{item.photoUrl && <img src={item.photoUrl} alt="" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} />}</span><div><strong>{item.displayName || "Google user"}</strong><small>{item.email || "No email"}</small><span className="user-provider-badge">{provider} account</span><code>{item.uid}</code></div></div></td>
           <td><select aria-label={`Role for ${item.email || item.uid}`} className="user-role-select" value={assignment.role} onChange={(event) => patchAssignment(item.uid, { role: event.target.value as ManagedRole })}>{ROLE_OPTIONS.map((option) => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}</select></td>
@@ -294,7 +317,7 @@ export default function UserAdmin({ user }: { user: User }) {
           <td>{assignment.role === "FACULTY" ? <select aria-label={`Faculty college email for ${item.email || item.uid}`} className="user-scope-select" value={assignment.facultyId} onChange={(event) => patchAssignment(item.uid, { facultyId: event.target.value })}><option value="">Select faculty email</option>{assignment.facultyId && !facultyOptions.some((option) => option.email.toLowerCase() === assignment.facultyId.toLowerCase()) && <option value={assignment.facultyId}>{assignment.facultyId}</option>}{facultyOptions.map((option) => <option key={option.id} value={option.email}>{option.name} · {option.email}{option.departmentName || option.departmentId ? ` · ${option.departmentName || option.departmentId}` : ""}</option>)}</select> : "—"}</td>
           <td>{assignment.role === "STUDENT_VIEWER" ? <input aria-label={`Student college email for ${item.email || item.uid}`} className="user-scope-input" type="email" value={assignment.studentCollegeEmail} onChange={(event) => patchAssignment(item.uid, { studentCollegeEmail: event.target.value })} placeholder="College email (not sign-in Gmail)" /> : "—"}</td>
           <td>{assignment.role === "STUDENT_VIEWER" ? <input aria-label={`Roll number for ${item.email || item.uid}`} className="user-scope-input" maxLength={64} value={assignment.studentRollNo} onChange={(event) => patchAssignment(item.uid, { studentRollNo: event.target.value })} placeholder="Roll number" /> : "—"}</td>
-          <td>{assignment.role === "STUDENT_VIEWER" ? <select aria-label={`Section for ${item.email || item.uid}`} className="user-scope-select" value={assignment.sectionId} onChange={(event) => patchAssignment(item.uid, { sectionId: event.target.value })}><option value="">Select section</option>{assignment.sectionId && !sectionOptions.some((option) => option.id === assignment.sectionId) && <option value={assignment.sectionId}>{assignment.sectionId}</option>}{sectionOptions.map((option) => <option key={option.id} value={option.id}>{option.name}{option.departmentId ? ` · ${option.departmentId}` : ""}</option>)}</select> : "—"}</td>
+          <td>{assignment.role === "STUDENT_VIEWER" ? <select aria-label={`Section for ${item.email || item.uid}`} className="user-scope-select" value={assignment.sectionId} onChange={(event) => patchAssignment(item.uid, { sectionId: event.target.value })}><option value="">{!departmentFilter ? "Enter department ID first" : matchingSectionOptions.length ? "Select section" : "No sections match this department"}</option>{assignment.sectionId && !matchingSectionOptions.some((option) => option.id === assignment.sectionId) && !sectionOptions.some((option) => option.id === assignment.sectionId) && <option value={assignment.sectionId}>Current section · {assignment.sectionId}</option>}{matchingSectionOptions.map((option) => <option key={option.id} value={option.id}>{option.name}{option.departmentBlockNo ? ` · Block ${option.departmentBlockNo}` : ""}{option.departmentName ? ` · ${option.departmentName}` : option.departmentId ? ` · ${option.departmentId}` : ""}{option.departmentCode ? ` (${option.departmentCode})` : ""}{option.shiftId ? ` · ${option.shiftId.replace("-", " ")}` : ""}</option>)}</select> : "—"}</td>
           <td><span className={`user-access-pill ${item.role ? "assigned" : "pending"}`}>{item.disabled ? "Disabled" : item.role ? "Assigned" : "Pending"}</span></td>
           <td><button className="button button-light user-save-button" type="button" disabled={busyUid === item.uid || !changed} onClick={() => void saveAssignment(item)}>{busyUid === item.uid ? "Saving…" : "Save"}</button></td>
         </tr>;
