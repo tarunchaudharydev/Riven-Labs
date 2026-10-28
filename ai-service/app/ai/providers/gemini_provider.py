@@ -6,6 +6,52 @@ from app.core.config import settings
 from app.schemas.requirements import RequirementCatalog, RequirementInterpretation
 
 
+GEMINI_REQUIREMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "original_text": {"type": "string"},
+        "changes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject_id": {"type": "string"},
+                    "section_id": {"type": "string"},
+                    "sessions_per_week": {"type": ["integer", "null"]},
+                    "preferred_faculty_ids": {"type": "array", "items": {"type": "string"}},
+                    "excluded_slot_ids": {"type": "array", "items": {"type": "string"}},
+                    "preferred_slot_ids": {"type": "array", "items": {"type": "string"}},
+                    "periods_per_session": {"type": ["integer", "null"]},
+                    "priority": {"type": "string", "enum": ["HARD", "SOFT"]},
+                },
+                "required": [
+                    "subject_id",
+                    "section_id",
+                    "sessions_per_week",
+                    "preferred_faculty_ids",
+                    "excluded_slot_ids",
+                    "preferred_slot_ids",
+                    "periods_per_session",
+                    "priority",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "clarification_questions": {"type": "array", "items": {"type": "string"}},
+        "unsupported_requirements": {"type": "array", "items": {"type": "string"}},
+        "requires_review": {"type": "boolean"},
+    },
+    "required": [
+        "original_text",
+        "changes",
+        "clarification_questions",
+        "unsupported_requirements",
+        "requires_review",
+    ],
+    "additionalProperties": False,
+}
+
+
 class GeminiProvider:
     def __init__(self, api_key: str | None = None):
         if not api_key:
@@ -27,9 +73,9 @@ Catalog:
             contents=f"{prompt}\n\nUser request:\n{user_input}",
             config={
                 "response_mime_type": "application/json",
-                # Pass JSON Schema directly; the typed response_schema path
-                # serializes additionalProperties as unsupported snake_case.
-                "response_json_schema": RequirementInterpretation.model_json_schema(),
+                # Use a compact schema with only Gemini's supported JSON Schema
+                # keywords. Pydantic applies the stricter app-side validation below.
+                "response_json_schema": GEMINI_REQUIREMENT_SCHEMA,
             },
         )
         if not response.text:
