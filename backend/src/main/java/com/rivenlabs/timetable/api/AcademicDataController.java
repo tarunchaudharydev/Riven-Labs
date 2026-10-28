@@ -34,9 +34,9 @@ public class AcademicDataController {
         Map<String, Object> inputs = database.readMap(database.tenantPath(principal.institutionId(), "schedulingInputs", termId));
         if (!"DEPARTMENT_ADMIN".equals(principal.role())) return inputs;
         String departmentId = principal.departmentId();
-        inputs.put("sections", filterInputRows(inputs.get("sections"), departmentId, false));
-        inputs.put("requirements", filterInputRows(inputs.get("requirements"), departmentId, false));
-        inputs.put("faculty", filterInputRows(inputs.get("faculty"), departmentId, true));
+        inputs.put("sections", filterInputRows(inputs.get("sections"), departmentId, false, false));
+        inputs.put("requirements", filterInputRows(inputs.get("requirements"), departmentId, false, false));
+        inputs.put("faculty", filterInputRows(inputs.get("faculty"), departmentId, true, false));
         inputs.put("rooms", filterInputRows(inputs.get("rooms"), departmentId, false, true));
         return inputs;
     }
