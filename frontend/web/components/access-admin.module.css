@@ -59,3 +59,19 @@
   .root :global(.access-pending-card){padding:30px 22px}
   .root :global(.access-pending-card h1){font-size:22px}
 }
+
+
+.root :global(.user-page-size){display:grid;gap:5px;min-width:90px;color:#68766e;font-size:9px;font-weight:700}
+.root :global(.user-page-size select){height:33px;min-width:82px;border:1px solid #e1e8e2;border-radius:6px;background:#fff;color:#44534a;padding:0 8px;font-size:10px}
+.root :global(.user-scope-select){height:31px;min-width:145px;max-width:240px;padding:0 7px;border:1px solid #e1e8e2;border-radius:6px;background:#fff;color:#44534a;font-size:9px;outline:none}
+.root :global(.user-scope-select:focus){border-color:#86b493;box-shadow:0 0 0 2px rgba(99,157,116,.1)}
+.root :global(.user-table-scroll){overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+@media(max-width:760px){
+  .root :global(.user-page-size){grid-template-columns:auto 1fr;align-items:center;gap:10px}
+  .root :global(.user-page-size select){width:100%}
+  .root :global(.user-admin-actions){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .root :global(.user-admin-actions .button){justify-content:center;width:100%;min-width:0;padding-inline:7px}
+  .root :global(.user-table){min-width:1080px}
+  .root :global(.user-admin-footer > div){width:100%}
+  .root :global(.user-admin-footer .button){flex:1}
+}

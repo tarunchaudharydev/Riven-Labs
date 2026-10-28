@@ -20,13 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.regex.Pattern;
 
 @RestController
@@ -51,15 +45,57 @@ public class AdminUsersController {
     public Map<String, Object> users(
             @AuthenticationPrincipal AppPrincipal principal,
             @RequestParam(defaultValue = "100") int limit,
-            @RequestParam(required = false) String pageToken) {
+            @RequestParam(required = false) String pageToken,
+            @RequestParam(required = false) String search) {
         roleGuard.require(principal, "SUPER_ADMIN");
         int pageSize = Math.max(1, Math.min(limit, 100));
         try {
-            ListUsersPage page = firebaseAuth.listUsers(pageToken, pageSize);
             Map<String, Object> facultyRecords = database.readMap(
                     database.tenantPath(principal.institutionId(), "faculty"));
+            Map<String, Object> sectionRecords = database.readMap(
+                    database.tenantPath(principal.institutionId(), "sections"));
+            Map<String, Object> departmentRecords = database.readMap(
+                    database.tenantPath(principal.institutionId(), "departments"));
+            List<UserRecord> sourceUsers = new ArrayList<>();
+            String query = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+            String nextPageToken;
+            if (query.isEmpty()) {
+                ListUsersPage page = firebaseAuth.listUsers(pageToken, pageSize);
+                sourceUsers.addAll(page.getValues());
+                nextPageToken = page.getNextPageToken();
+            } else {
+                List<UserRecord> matchingUsers = new ArrayList<>();
+                for (UserRecord candidate : firebaseAuth.listUsers(null, 1000).iterateAll()) {
+                    Map<String, Object> claims = candidate.getCustomClaims();
+                    String institutionId = claimString(claims, "institutionId");
+                    if (institutionId != null && !principal.institutionId().equals(institutionId)) continue;
+                    String searchable = String.join(" ",
+                            Objects.toString(candidate.getDisplayName(), ""),
+                            Objects.toString(candidate.getEmail(), ""),
+                            candidate.getUid(),
+                            Objects.toString(claimString(claims, "studentCollegeEmail"), ""),
+                            Objects.toString(facultyCollegeEmail(facultyRecords, claimString(claims, "facultyId")), ""));
+                    if (searchable.toLowerCase(Locale.ROOT).contains(query)) matchingUsers.add(candidate);
+                }
+                int offset;
+                try {
+                    offset = pageToken == null || pageToken.isBlank() ? 0 : Integer.parseInt(pageToken);
+                } catch (NumberFormatException ex) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid search result page.");
+                }
+                if (offset < 0 || offset > matchingUsers.size()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid search result page.");
+                }
+                matchingUsers.sort(Comparator
+                        .comparingInt((UserRecord candidate) -> Objects.toString(candidate.getEmail(), "").equalsIgnoreCase(query) ? 0
+                                : Objects.toString(candidate.getEmail(), "").toLowerCase(Locale.ROOT).startsWith(query) ? 1 : 2)
+                        .thenComparing(candidate -> Objects.toString(candidate.getDisplayName(), ""), String.CASE_INSENSITIVE_ORDER));
+                int end = Math.min(offset + pageSize, matchingUsers.size());
+                sourceUsers.addAll(matchingUsers.subList(offset, end));
+                nextPageToken = end < matchingUsers.size() ? Integer.toString(end) : null;
+            }
             List<Map<String, Object>> users = new ArrayList<>();
-            for (UserRecord user : page.getValues()) {
+            for (UserRecord user : sourceUsers) {
                 Map<String, Object> claims = user.getCustomClaims();
                 String institutionId = claimString(claims, "institutionId");
                 if (institutionId != null && !principal.institutionId().equals(institutionId)) continue;
@@ -74,14 +110,18 @@ public class AdminUsersController {
                 row.put("institutionId", institutionId);
                 row.put("departmentId", claimString(claims, "departmentId"));
                 row.put("facultyId", facultyCollegeEmail(facultyRecords, claimString(claims, "facultyId")));
-                row.put("studentId", user.getEmail() == null ? "" : user.getEmail());
+                String studentCollegeEmail = claimString(claims, "studentCollegeEmail");
+                row.put("studentId", Objects.toString(studentCollegeEmail, ""));
+                row.put("studentCollegeEmail", studentCollegeEmail);
                 row.put("studentRollNo", claimString(claims, "studentRollNo"));
                 row.put("sectionId", claimString(claims, "sectionId"));
                 users.add(row);
             }
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("users", users);
-            result.put("nextPageToken", page.getNextPageToken());
+            result.put("facultyOptions", facultyOptions(facultyRecords, departmentRecords));
+            result.put("sectionOptions", sectionOptions(sectionRecords, departmentRecords));
+            result.put("nextPageToken", nextPageToken);
             return result;
         } catch (FirebaseAuthException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Could not load Firebase Authentication users.", ex);
@@ -103,6 +143,8 @@ public class AdminUsersController {
         String facultyId = "FACULTY".equals(role)
                 ? resolveFacultyId(principal.institutionId(), request.facultyId()) : null;
         String sectionId = optionalId(request.sectionId(), "sectionId");
+        String studentCollegeEmail = "STUDENT_VIEWER".equals(role)
+                ? optionalEmail(request.studentCollegeEmail(), "Student college email") : null;
         String studentRollNo = "STUDENT_VIEWER".equals(role)
                 ? optionalStudentRollNo(request.studentRollNo()) : null;
         switch (role) {
@@ -122,6 +164,9 @@ public class AdminUsersController {
         if ("STUDENT_VIEWER".equals(role) && sectionId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Student requires a section assignment.");
         }
+        if ("STUDENT_VIEWER".equals(role) && studentCollegeEmail == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Student requires a valid college email ID.");
+        }
 
         verifyRecord(principal.institutionId(), "departments", departmentId, "Department");
         verifyRecord(principal.institutionId(), "faculty", facultyId, "Faculty member");
@@ -139,13 +184,15 @@ public class AdminUsersController {
             }
 
             Map<String, Object> claims = new LinkedHashMap<>(target.getCustomClaims());
-            for (String key : List.of("institutionId", "role", "departmentId", "facultyId", "sectionId", "studentRollNo")) claims.remove(key);
+            for (String key : List.of("institutionId", "role", "departmentId", "facultyId", "sectionId",
+                    "studentCollegeEmail", "studentRollNo")) claims.remove(key);
             if (!role.isEmpty()) {
                 claims.put("institutionId", principal.institutionId());
                 claims.put("role", role);
                 if (departmentId != null) claims.put("departmentId", departmentId);
                 if (facultyId != null) claims.put("facultyId", facultyId);
                 if (sectionId != null) claims.put("sectionId", sectionId);
+                if (studentCollegeEmail != null) claims.put("studentCollegeEmail", studentCollegeEmail);
                 if (studentRollNo != null) claims.put("studentRollNo", studentRollNo);
             }
             firebaseAuth.setCustomUserClaims(uid, claims);
@@ -183,14 +230,70 @@ public class AdminUsersController {
         return otherAdmins == 0;
     }
 
+    private List<Map<String, Object>> facultyOptions(Map<String, Object> facultyRecords, Map<String, Object> departments) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        for (Map.Entry<String, Object> entry : facultyRecords.entrySet()) {
+            if (!(entry.getValue() instanceof Map<?, ?> record)) continue;
+            Object rawEmail = record.get("college_email");
+            if (!(rawEmail instanceof String) || ((String) rawEmail).isBlank()) rawEmail = record.get("email");
+            if (!(rawEmail instanceof String) || !validEmail(((String) rawEmail).trim())) continue;
+            String email = ((String) rawEmail).trim();
+            Map<String, Object> option = new LinkedHashMap<>();
+            option.put("id", entry.getKey());
+            option.put("name", Objects.toString(record.get("name"), entry.getKey()));
+            option.put("email", email);
+            String departmentId = Objects.toString(record.get("department_id"), "");
+            option.put("departmentId", departmentId);
+            Object department = departments.get(departmentId);
+            option.put("departmentName", department instanceof Map<?, ?> item
+                    ? Objects.toString(item.get("name"), departmentId) : departmentId);
+            options.add(option);
+        }
+        options.sort(Comparator.comparing(item -> Objects.toString(item.get("name"), ""), String.CASE_INSENSITIVE_ORDER));
+        return options;
+    }
+
+    private List<Map<String, Object>> sectionOptions(Map<String, Object> sectionRecords, Map<String, Object> departments) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        for (Map.Entry<String, Object> entry : sectionRecords.entrySet()) {
+            if (!(entry.getValue() instanceof Map<?, ?> record)) continue;
+            Map<String, Object> option = new LinkedHashMap<>();
+            option.put("id", entry.getKey());
+            option.put("name", Objects.toString(record.get("name"), entry.getKey()));
+            option.put("shiftId", Objects.toString(record.get("shift_id"), ""));
+            String departmentId = Objects.toString(record.get("department_id"), "");
+            option.put("departmentId", departmentId);
+            Object department = departments.get(departmentId);
+            option.put("departmentName", department instanceof Map<?, ?> item
+                    ? Objects.toString(item.get("name"), departmentId) : departmentId);
+            options.add(option);
+        }
+        options.sort(Comparator.comparing(item -> Objects.toString(item.get("name"), ""), String.CASE_INSENSITIVE_ORDER));
+        return options;
+    }
+
     private String facultyCollegeEmail(Map<String, Object> facultyRecords, String facultyId) {
         if (facultyId == null) return null;
         Object value = facultyRecords.get(facultyId);
         if (value instanceof Map<?, ?> record) {
             Object email = record.get("college_email");
-            if (email instanceof String text && !text.isBlank()) return text;
+            if (!(email instanceof String) || ((String) email).isBlank()) email = record.get("email");
+            if (email instanceof String && !((String) email).isBlank()) return (String) email;
         }
         return facultyId;
+    }
+
+    private boolean validEmail(String email) {
+        return email.length() <= 254 && email.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+    }
+
+    private String optionalEmail(String value, String label) {
+        if (value == null || value.isBlank()) return null;
+        String email = value.trim();
+        if (!validEmail(email)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " must be a valid email address.");
+        }
+        return email;
     }
 
     private String resolveFacultyId(String institutionId, String value) {
@@ -206,7 +309,8 @@ public class AdminUsersController {
         for (Map.Entry<String, Object> entry : records.entrySet()) {
             if (!(entry.getValue() instanceof Map<?, ?> record)) continue;
             Object email = record.get("college_email");
-            if (email instanceof String text && entered.equalsIgnoreCase(text.trim())) {
+            if (!(email instanceof String) || ((String) email).isBlank()) email = record.get("email");
+            if (email instanceof String && entered.equalsIgnoreCase(((String) email).trim())) {
                 if (match != null) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
                             "More than one faculty record uses that college email. Make faculty emails unique first.");
@@ -246,5 +350,5 @@ public class AdminUsersController {
     }
 
     public record RoleAssignment(String role, String departmentId, String facultyId, String sectionId,
-                                 String studentRollNo) {}
+                                 String studentCollegeEmail, String studentRollNo) {}
 }

@@ -24,7 +24,7 @@ public class SchedulingInputService {
         String path = database.tenantPath(principal.institutionId(), "schedulingInputs", termId);
         Map<String, Object> input = database.readMap(path);
         if (input.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No approved scheduling input exists for this academic term.");
-        for (String collection : List.of("time_slots", "sections", "faculty", "rooms", "requirements")) {
+        for (String collection : List.of("shifts", "time_slots", "sections", "faculty", "rooms", "requirements")) {
             input.put(collection, normalize(input.get(collection)));
         }
         attachDepartmentDetails(input, principal.institutionId());
@@ -52,7 +52,8 @@ public class SchedulingInputService {
                 "subjects", subjects,
                 "faculty", entities(input.get("faculty"), true),
                 "rooms", entities(input.get("rooms"), false),
-                "time_slots", entities(input.get("time_slots"), false));
+                "time_slots", entities(input.get("time_slots"), false),
+                "shifts", entities(input.get("shifts"), false));
     }
 
     public Map<String, Object> withApprovedChanges(Map<String, Object> input, Map<String, Object> interpretation) {
@@ -160,6 +161,11 @@ public class SchedulingInputService {
             if (item.get("name") != null) entity.put("name", item.get("name"));
             putIfPresent(entity, item, "code");
             putIfPresent(entity, item, "aliases");
+            putIfPresent(entity, item, "shift_id");
+            putIfPresent(entity, item, "shift_ids");
+            putIfPresent(entity, item, "is_teaching_period");
+            putIfPresent(entity, item, "start_time");
+            putIfPresent(entity, item, "end_time");
             if (includeDepartment) {
                 putIfPresent(entity, item, "department_id");
                 putIfPresent(entity, item, "department_name");
@@ -170,8 +176,6 @@ public class SchedulingInputService {
                 entity.put("day", item.get("day"));
                 putIfPresent(entity, item, "period");
                 putIfPresent(entity, item, "label");
-                putIfPresent(entity, item, "start_time");
-                putIfPresent(entity, item, "end_time");
             }
             if (entity.get("id") != null && entity.get("name") != null || entity.get("day") != null) result.add(entity);
         }
