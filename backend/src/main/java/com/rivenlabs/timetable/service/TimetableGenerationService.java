@@ -3,14 +3,18 @@ package com.rivenlabs.timetable.service;
 import com.rivenlabs.timetable.data.RealtimeDatabaseStore;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class TimetableGenerationService {
+    private static final Logger log = LoggerFactory.getLogger(TimetableGenerationService.class);
     private final RealtimeDatabaseStore database;
     private final AiServiceClient ai;
 
@@ -44,8 +48,28 @@ public class TimetableGenerationService {
             database.update(jobPath, Map.of("status", "COMPLETED", "finishedAt", Instant.now().toString(), "draftId", draftId,
                     "solverStatus", solverStatus, "message", "A validated timetable draft is ready for review."));
         } catch (Exception ex) {
-            database.update(jobPath, Map.of("status", "FAILED", "finishedAt", Instant.now().toString(),
-                    "message", "Timetable generation failed. Check service configuration and scheduling input."));
+            log.error("Timetable generation failed for job {}", jobId, ex);
+            try {
+                database.update(jobPath, Map.of("status", "FAILED", "finishedAt", Instant.now().toString(),
+                        "message", failureMessage(ex)));
+            } catch (Exception persistenceException) {
+                log.error("Could not persist failed timetable job status for job {}", jobId, persistenceException);
+            }
         }
+    }
+
+    private String failureMessage(Exception ex) {
+        Throwable cause = ex;
+        while (cause != null) {
+            if (cause instanceof ResponseStatusException response && response.getReason() != null) {
+                return response.getReason();
+            }
+            if (cause instanceof IllegalStateException state && state.getMessage() != null
+                    && state.getMessage().startsWith("Could not ")) {
+                return "Could not save or load timetable data in Firebase Realtime Database. Check backend Firebase credentials, database URL, and database rules.";
+            }
+            cause = cause.getCause();
+        }
+        return "Timetable generation failed because of a backend error. Check the backend logs for this generation job.";
     }
 }

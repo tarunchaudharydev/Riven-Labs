@@ -19,13 +19,13 @@ const resources: Record<CollectionKey, Resource> = {
     { key: "name", label: "Term name", required: true }, { key: "academic_year", label: "Academic year", required: true }, { key: "status", label: "Status", hint: "For example: ACTIVE, DRAFT, ARCHIVED" }, { key: "start_date", label: "Start date", type: "text" }, { key: "end_date", label: "End date", type: "text" },
   ] },
   faculty: { title: "Faculty", singular: "faculty member", description: "Track qualified subjects, weekly teaching limits, and availability.", fields: [
-    { key: "name", label: "Full name", required: true }, { key: "department_id", label: "Department ID", required: true }, { key: "email", label: "Work email", type: "email" }, { key: "max_weekly_periods", label: "Maximum weekly periods", type: "number", required: true }, { key: "qualified_subject_ids", label: "Qualified subject IDs", hint: "Comma-separated IDs" }, { key: "unavailable_slot_ids", label: "Unavailable slot IDs", hint: "Comma-separated IDs" }, { key: "preferred_slot_ids", label: "Preferred slot IDs", hint: "Comma-separated IDs" }, { key: "active", label: "Active faculty", type: "checkbox" },
+    { key: "name", label: "Full name", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or initials" }, { key: "department_id", label: "Department ID", required: true }, { key: "email", label: "Work email", type: "email" }, { key: "max_weekly_periods", label: "Maximum weekly periods", type: "number", required: true }, { key: "qualified_subject_ids", label: "Qualified subject IDs", hint: "Comma-separated IDs" }, { key: "unavailable_slot_ids", label: "Unavailable slot IDs", hint: "Comma-separated IDs" }, { key: "preferred_slot_ids", label: "Preferred slot IDs", hint: "Comma-separated IDs" }, { key: "active", label: "Active faculty", type: "checkbox" },
   ] },
   subjects: { title: "Subjects", singular: "subject", description: "Set course identifiers, workload requirements, and room constraints.", fields: [
-    { key: "name", label: "Subject name", required: true }, { key: "code", label: "Subject code", required: true }, { key: "department_id", label: "Department ID", required: true }, { key: "term_id", label: "Academic term ID" }, { key: "faculty_ids", label: "Eligible faculty IDs", hint: "Comma-separated IDs" }, { key: "sessions_per_week", label: "Sessions per week", type: "number" }, { key: "periods_per_session", label: "Periods per session", type: "number" }, { key: "room_type", label: "Required room type", hint: "CLASSROOM or LAB" }, { key: "required_equipment", label: "Required equipment", hint: "Comma-separated values" },
+    { key: "name", label: "Subject name", required: true }, { key: "code", label: "Subject code", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or abbreviations" }, { key: "department_id", label: "Department ID", required: true }, { key: "term_id", label: "Academic term ID" }, { key: "faculty_ids", label: "Eligible faculty IDs", hint: "Comma-separated IDs" }, { key: "sessions_per_week", label: "Sessions per week", type: "number" }, { key: "periods_per_session", label: "Periods per session", type: "number" }, { key: "room_type", label: "Required room type", hint: "CLASSROOM or LAB" }, { key: "required_equipment", label: "Required equipment", hint: "Comma-separated values" },
   ] },
   sections: { title: "Sections", singular: "section", description: "Define student cohorts, sizes, and academic grouping.", fields: [
-    { key: "name", label: "Section name", required: true }, { key: "code", label: "Section code", required: true }, { key: "department_id", label: "Department ID", required: true }, { key: "student_count", label: "Student count", type: "number", required: true }, { key: "academic_year", label: "Academic year" }, { key: "term_id", label: "Academic term ID" },
+    { key: "name", label: "Section name", required: true }, { key: "code", label: "Section code", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or abbreviations" }, { key: "department_id", label: "Department ID", required: true }, { key: "student_count", label: "Student count", type: "number", required: true }, { key: "academic_year", label: "Academic year" }, { key: "term_id", label: "Academic term ID" },
   ] },
   rooms: { title: "Rooms & labs", singular: "room", description: "Set room capacities, equipment, and teaching type.", fields: [
     { key: "name", label: "Room name", required: true }, { key: "code", label: "Room code", required: true }, { key: "capacity", label: "Capacity", type: "number", required: true }, { key: "room_type", label: "Room type", hint: "CLASSROOM or LAB", required: true }, { key: "equipment", label: "Equipment", hint: "Comma-separated values" }, { key: "unavailable_slot_ids", label: "Unavailable slot IDs", hint: "Comma-separated IDs" },
@@ -34,7 +34,7 @@ const resources: Record<CollectionKey, Resource> = {
 
 const emptyForm = (resource: Resource) => Object.fromEntries(resource.fields.map((field) => [field.key, field.type === "checkbox" ? false : ""])) as Record<string, string | boolean>;
 const slug = (value: string) => value.trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
-const arrayFields = new Set(["qualified_subject_ids", "faculty_ids", "unavailable_slot_ids", "preferred_slot_ids", "required_equipment", "equipment"]);
+const arrayFields = new Set(["aliases", "qualified_subject_ids", "faculty_ids", "unavailable_slot_ids", "preferred_slot_ids", "required_equipment", "equipment"]);
 const numberFields = new Set(["max_weekly_periods", "sessions_per_week", "periods_per_session", "student_count", "capacity"]);
 
 export default function AcademicWorkspace({ user, role, onSaved }: { user: User; role: string; onSaved: () => void }) {
@@ -191,18 +191,18 @@ function SchedulingInputEditor({ user, writable }: { user: User; writable: boole
   function buildInputs() {
     const values = (key: string) => Object.values(catalog[key] || {});
     const sectionRecords = values("sections").filter((row) => !row.term_id || row.term_id === termId);
-    const sections = sectionRecords.map((row) => ({ id: row.id, name: row.name, department_id: row.department_id || "", student_count: Number(row.student_count || 0) }));
-    const faculty = values("faculty").map((row) => ({ id: row.id, name: row.name, department_id: row.department_id || "", qualified_subject_ids: Array.isArray(row.qualified_subject_ids) ? row.qualified_subject_ids.filter((id): id is string => typeof id === "string") : [], unavailable_slot_ids: row.unavailable_slot_ids || [], preferred_slot_ids: row.preferred_slot_ids || [], max_weekly_periods: Number(row.max_weekly_periods || 18), active: row.active !== false }));
-    const rooms = values("rooms").map((row) => ({ id: row.id, name: row.name, capacity: Number(row.capacity || 0), room_type: row.room_type || "CLASSROOM", equipment: row.equipment || [], unavailable_slot_ids: row.unavailable_slot_ids || [] }));
+    const sections = sectionRecords.map((row) => ({ id: row.id, name: row.name, code: row.code || "", aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", student_count: Number(row.student_count || 0) }));
+    const faculty = values("faculty").map((row) => ({ id: row.id, name: row.name, aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", qualified_subject_ids: Array.isArray(row.qualified_subject_ids) ? row.qualified_subject_ids.filter((id): id is string => typeof id === "string") : [], unavailable_slot_ids: row.unavailable_slot_ids || [], preferred_slot_ids: row.preferred_slot_ids || [], max_weekly_periods: Number(row.max_weekly_periods || 18), active: row.active !== false }));
+    const rooms = values("rooms").map((row) => ({ id: row.id, name: row.name, code: row.code || "", capacity: Number(row.capacity || 0), room_type: row.room_type || "CLASSROOM", equipment: row.equipment || [], unavailable_slot_ids: row.unavailable_slot_ids || [] }));
     const subjects = values("subjects").filter((row) => !row.term_id || row.term_id === termId);
     const requirements = subjects.flatMap((subject) => sectionRecords.filter((section) => !subject.department_id || section.department_id === subject.department_id).map((section) => ({
-      id: `${subject.id}-${section.id}`.slice(0, 120), department_id: subject.department_id || section.department_id || "", subject_id: subject.id, subject_name: subject.name, section_id: section.id,
+      id: `${subject.id}-${section.id}`.slice(0, 120), department_id: subject.department_id || section.department_id || "", subject_id: subject.id, subject_name: subject.name, code: subject.code || "", aliases: Array.isArray(subject.aliases) ? subject.aliases : [], section_id: section.id,
       sessions_per_week: Number(subject.sessions_per_week || 1), faculty_ids: Array.isArray(subject.faculty_ids) ? subject.faculty_ids : faculty.filter((member) => member.qualified_subject_ids.includes(subject.id)).map((member) => member.id),
       room_type: subject.room_type || "CLASSROOM", required_equipment: subject.required_equipment || [], periods_per_session: Number(subject.periods_per_session || 1), preferred_slot_ids: [], excluded_slot_ids: [],
     })));
     const time_slots = ["MON", "TUE", "WED", "THU", "FRI"].flatMap((day) => Array.from({ length: 8 }, (_, index) => ({ id: `${day.toLowerCase()}-${index + 1}`, day, period: index + 1, is_teaching_period: true })));
     setJson(JSON.stringify({ time_slots, sections, faculty, rooms, requirements }, null, 2));
-    setNotice("Starter inputs built from the catalog. Review days, breaks, requirements, qualified faculty, and room availability before saving.");
+    setNotice("Starter inputs built from the catalog. Review days, breaks, requirements, qualified faculty, and room availability. Add each slot's actual label and start_time/end_time if you want the AI to interpret clock-time requests.");
     setError("");
   }
 
@@ -227,7 +227,7 @@ function SchedulingInputEditor({ user, writable }: { user: User; writable: boole
     {!termId || loadedTerm !== termId ? <div className={styles.empty}>Loading timetable inputs…</div> : <form onSubmit={save}>
       <label className={styles.jsonLabel} htmlFor="scheduling-inputs-json">Approved scheduling input JSON</label>
       <textarea id="scheduling-inputs-json" className={styles.jsonEditor} value={json} onChange={(event) => setJson(event.target.value)} spellCheck={false} placeholder="Select a term, then build a starter from your catalog or paste valid JSON." />
-      <div className={styles.formFooter}><p>Each row is validated and stored under the selected term in Realtime Database. Edit this structure to configure exact days, breaks, availability, and requirements.</p>{writable && <button type="submit" disabled={saving || !termId || !json.trim()}>{saving ? "Saving…" : "Validate & save inputs"}</button>}</div>
+      <div className={styles.formFooter}><p>Each row is validated and stored under the selected term in Realtime Database. Edit this structure to configure exact days, breaks, availability, and requirements. For clock-time prompts, add each slot's actual label, start_time, and end_time; period numbers alone do not identify a clock time.</p>{writable && <button type="submit" disabled={saving || !termId || !json.trim()}>{saving ? "Saving…" : "Validate & save inputs"}</button>}</div>
     </form>}
   </section>;
 }

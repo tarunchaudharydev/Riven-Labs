@@ -30,7 +30,16 @@ public class AiServiceClient {
                     .body(body).retrieve().body(Map.class);
             return result == null ? Map.of() : (Map<String, Object>) result;
         } catch (org.springframework.web.client.RestClientResponseException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "The AI service rejected or could not process this request.", ex);
+            String reason = switch (ex.getStatusCode().value()) {
+                case 422 -> "The AI service rejected the request data (HTTP 422). Check the backend logs for the validation details.";
+                case 401, 403 -> "The AI service rejected its backend credentials. Check AI_SERVICE_API_KEY in the backend environment.";
+                case 502, 503, 504 -> "The AI service is unavailable. Check that the AI service is running and AI_SERVICE_URL points to it.";
+                default -> "The AI service returned HTTP " + ex.getStatusCode().value() + ". Check the AI service logs for the request details.";
+            };
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, reason, ex);
+        } catch (org.springframework.web.client.ResourceAccessException ex) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Could not connect to the AI service. Start it and check AI_SERVICE_URL in the backend environment.", ex);
         }
     }
 }
