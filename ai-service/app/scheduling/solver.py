@@ -48,7 +48,11 @@ def solve_timetable(problem: SchedulingProblem) -> ScheduleResult:
 
     for req in problem.requirements:
         section = section_map[req.section_id]
-        for day, day_slots in slots_by_day.items():
+        for day, all_day_slots in slots_by_day.items():
+            day_slots = [
+                slot for slot in all_day_slots
+                if not problem.shifts or section.shift_id in slot.shift_ids
+            ]
             for index, start in enumerate(day_slots):
                 covered = day_slots[index:index + req.periods_per_session]
                 if len(covered) != req.periods_per_session or any(
@@ -142,7 +146,8 @@ def solve_timetable(problem: SchedulingProblem) -> ScheduleResult:
             continue
         req = next(r for r in problem.requirements if r.id == option.requirement_id)
         entries.append(ScheduleEntry(
-            requirement_id=req.id, department_id=req.department_id, subject_id=req.subject_id, subject_name=req.subject_name,
+            requirement_id=req.id, shift_id=section_map[req.section_id].shift_id,
+            department_id=req.department_id, subject_id=req.subject_id, subject_name=req.subject_name,
             section_id=req.section_id, faculty_id=option.faculty_id, room_id=option.room_id,
             day=option.day, period=option.period, duration=req.periods_per_session,
             slot_ids=list(option.slot_ids),

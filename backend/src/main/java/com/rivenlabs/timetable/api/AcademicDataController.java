@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.*;
 
 /** Institution-scoped academic catalog backed by Firebase Realtime Database. */
@@ -50,6 +51,29 @@ public class AcademicDataController {
         }
         validKey(termId);
         Map<String, Object> inputs = new LinkedHashMap<>();
+        Object rawShifts = body.get("shifts");
+        if (rawShifts != null && !(rawShifts instanceof Collection<?>)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "shifts must be an array when provided.");
+        }
+        List<Map<String, Object>> shifts = objectList(rawShifts);
+        if (!shifts.isEmpty()) {
+            if (shifts.size() != 2) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Configure exactly two shifts for this institution.");
+            uniqueIds(shifts, "shifts");
+            Set<String> configuredShiftIds = new HashSet<>();
+            for (Map<String, Object> shift : shifts) configuredShiftIds.add(Objects.toString(shift.get("id")));
+            if (!configuredShiftIds.equals(Set.of("shift-1", "shift-2"))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Use the fixed shift IDs shift-1 and shift-2.");
+            }
+            for (Map<String, Object> shift : shifts) {
+                requiredText(shift, "name");
+                LocalTime start = parseTime(shift.get("start_time"), "Shift start time");
+                LocalTime end = parseTime(shift.get("end_time"), "Shift end time");
+                if (!start.isBefore(end) || start.getMinute() != 0 || end.getMinute() != 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shift times must be whole-hour values and the end must follow the start.");
+                }
+            }
+            inputs.put("shifts", shifts);
+        }
         for (String field : List.of("time_slots", "sections", "faculty", "rooms", "requirements")) {
             Object value = body.get(field);
             if (!(value instanceof Collection<?> collection)) {
@@ -67,10 +91,24 @@ public class AcademicDataController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add at least one time slot, section, faculty member, room, and teaching requirement before saving.");
         }
         uniqueIds(slots, "time_slots"); uniqueIds(sections, "sections"); uniqueIds(faculty, "faculty"); uniqueIds(rooms, "rooms"); uniqueIds(requirements, "requirements");
+        Map<String, Map<String, Object>> shiftsById = new HashMap<>();
+        for (Map<String, Object> shift : shifts) shiftsById.put(Objects.toString(shift.get("id")), shift);
+        Set<String> dayPeriods = new HashSet<>();
         for (Map<String, Object> item : slots) {
             requiredText(item, "id"); requiredText(item, "day");
-            if (number(item.get("period")) < 1 || !Boolean.TRUE.equals(item.getOrDefault("is_teaching_period", true))) {
-                if (number(item.get("period")) < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Every teaching slot needs a positive period number.");
+            int period = number(item.get("period"));
+            if (period < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Every teaching slot needs a positive period number.");
+            if (!dayPeriods.add(item.get("day") + ":" + period)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "There can only be one slot per day and period.");
+            }
+            if (!shifts.isEmpty()) validateShiftSlot(item, shiftsById);
+        }
+        if (!shifts.isEmpty()) {
+            for (Map<String, Object> section : sections) {
+                String shiftId = requiredText(section, "shift_id");
+                if (!shiftsById.containsKey(shiftId)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each section must use one of the configured shifts.");
+                }
             }
         }
         for (Map<String, Object> item : requirements) {
@@ -222,6 +260,12 @@ public class AcademicDataController {
         if ("faculty".equals(collection) || "subjects".equals(collection) || "sections".equals(collection)) {
             requiredText(record, "department_id");
         }
+        if ("sections".equals(collection)) {
+            String shiftId = Objects.toString(record.get("shift_id"), "");
+            if (!Set.of("shift-1", "shift-2").contains(shiftId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose Shift 1 or Shift 2 for this section.");
+            }
+        }
         if ("rooms".equals(collection)) {
             int capacity = number(record.get("capacity"));
             if (capacity < 1 || capacity > 10000) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Room capacity must be between 1 and 10000.");
@@ -314,6 +358,51 @@ public class AcademicDataController {
             result.add((Map<String, Object>) map);
         }
         return result;
+    }
+
+    private void validateShiftSlot(Map<String, Object> slot, Map<String, Map<String, Object>> shiftsById) {
+        LocalTime start = parseTime(slot.get("start_time"), "Time slot start_time");
+        LocalTime end = parseTime(slot.get("end_time"), "Time slot end_time");
+        if (!start.isBefore(end) || start.plusHours(1).compareTo(end) != 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each timetable slot must be exactly one hour.");
+        }
+        Object rawShiftIds = slot.get("shift_ids");
+        if (!(rawShiftIds instanceof Collection<?> shiftIds) || shiftIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Every slot must belong to at least one configured shift.");
+        }
+        Set<String> actualShiftIds = new HashSet<>();
+        for (Object rawId : shiftIds) actualShiftIds.add(Objects.toString(rawId, ""));
+        if (actualShiftIds.size() != shiftIds.size()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A slot must not list the same shift more than once.");
+        }
+        Set<String> expectedShiftIds = new HashSet<>();
+        for (Map<String, Object> shift : shiftsById.values()) {
+            LocalTime shiftStart = parseTime(shift.get("start_time"), "Shift start time");
+            LocalTime shiftEnd = parseTime(shift.get("end_time"), "Shift end time");
+            if (!start.isBefore(shiftStart) && !end.isAfter(shiftEnd)) expectedShiftIds.add(Objects.toString(shift.get("id")));
+        }
+        if (!actualShiftIds.equals(expectedShiftIds)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Time slots must be shared by every shift whose hours contain that slot.");
+        }
+        for (Object rawId : shiftIds) {
+            String shiftId = Objects.toString(rawId, "");
+            Map<String, Object> shift = shiftsById.get(shiftId);
+            if (shift == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A time slot references an unknown shift.");
+            LocalTime shiftStart = parseTime(shift.get("start_time"), "Shift start time");
+            LocalTime shiftEnd = parseTime(shift.get("end_time"), "Shift end time");
+            if (start.isBefore(shiftStart) || end.isAfter(shiftEnd)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A time slot falls outside its assigned shift.");
+            }
+        }
+    }
+
+    private LocalTime parseTime(Object value, String label) {
+        try {
+            if (!(value instanceof String text)) throw new IllegalArgumentException();
+            return LocalTime.parse(text);
+        } catch (RuntimeException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " must use HH:mm format.");
+        }
     }
 
     private void uniqueIds(List<Map<String, Object>> rows, String label) {

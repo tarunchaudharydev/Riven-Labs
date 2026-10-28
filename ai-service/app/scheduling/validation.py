@@ -34,6 +34,11 @@ def validate_schedule(problem: SchedulingProblem, entries: list[ScheduleEntry]) 
         daily_counts[(req.id, entry.day)] += 1
         if entry.subject_id != req.subject_id or entry.section_id != req.section_id:
             issue("REQUIREMENT_MISMATCH", "Assignment subject or section does not match its teaching requirement.", [req.id])
+        if problem.shifts and (
+            entry.shift_id != section.shift_id
+            or section.shift_id is None
+        ):
+            issue("SHIFT_MISMATCH", "Assignment shift does not match its section.", [section.id, req.id])
         if entry.faculty_id not in req.faculty_ids or req.subject_id not in teacher.qualified_subject_ids or not teacher.active:
             issue("UNQUALIFIED_FACULTY", "Assigned faculty member is inactive or not authorized for this subject.", [teacher.id, req.id])
         if room.capacity < section.student_count or room.room_type != req.room_type or not set(req.required_equipment) <= set(room.equipment):
@@ -47,6 +52,8 @@ def validate_schedule(problem: SchedulingProblem, entries: list[ScheduleEntry]) 
         ordered = sorted(covered, key=lambda slot: slot.period)
         if any(not slot.is_teaching_period for slot in ordered):
             issue("BLOCKED_PERIOD", "An assignment uses a break or blocked period.", [req.id])
+        if problem.shifts and section.shift_id and any(section.shift_id not in slot.shift_ids for slot in ordered):
+            issue("SHIFT_MISMATCH", "A section is assigned outside its configured shift hours.", [section.id, req.id])
         if len({slot.day for slot in ordered}) != 1 or any(b.period != a.period + 1 for a, b in zip(ordered, ordered[1:])):
             issue("NON_CONTIGUOUS_BLOCK", "A multi-period class must occupy contiguous periods on one day.", [req.id])
         if ordered and (ordered[0].day != entry.day or ordered[0].period != entry.period):

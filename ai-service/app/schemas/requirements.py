@@ -11,6 +11,7 @@ class CatalogEntity(StrictModel):
     code: str | None = Field(default=None, max_length=64)
     aliases: list[str] = Field(default_factory=list, max_length=20)
     department_id: str | None = None
+    shift_id: str | None = None
 
 
 class CatalogTimeSlot(StrictModel):
@@ -20,6 +21,15 @@ class CatalogTimeSlot(StrictModel):
     label: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    shift_ids: list[str] = Field(default_factory=list)
+    is_teaching_period: bool = True
+
+
+class CatalogShift(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=160)
+    start_time: str
+    end_time: str
 
 
 class FacultyUnavailability(StrictModel):
@@ -33,6 +43,7 @@ class RequirementCatalog(StrictModel):
     faculty: list[CatalogEntity] = Field(default_factory=list, max_length=1000)
     rooms: list[CatalogEntity] = Field(default_factory=list, max_length=1000)
     time_slots: list[CatalogTimeSlot] = Field(default_factory=list, max_length=500)
+    shifts: list[CatalogShift] = Field(default_factory=list, max_length=10)
 
 
 class RequirementChange(StrictModel):
