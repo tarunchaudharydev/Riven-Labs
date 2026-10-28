@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { getIdTokenResult, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { onValue, ref } from "firebase/database";
 import type { User } from "firebase/auth";
 import { backendRequest } from "../lib/backend";
-import { getFirebaseAuth } from "../lib/firebase";
+import { getFirebaseAuth, getRealtimeDatabase } from "../lib/firebase";
+import AcademicWorkspace from "../components/AcademicWorkspace";
 
 type DashboardData = {
   institutionName: string;
@@ -15,7 +17,7 @@ type DashboardData = {
   publishedTimetables: { termId: string; draftId: string; publishedAt: string; entries: TimetableEntry[] | Record<string, TimetableEntry> }[];
   drafts?: TimetableDraft[];
 };
-type TimetableEntry = { requirement_id: string; subject_id: string; subject_name: string; section_id: string; faculty_id: string; room_id: string; day: string; period: number; duration: number; slot_ids: string[] };
+type TimetableEntry = { requirement_id: string; subject_id: string; subject_name: string; section_id: string; faculty_id: string; faculty_name?: string; room_id: string; day: string; period: number; duration: number; slot_ids: string[]; substitute?: boolean };
 type TimetableDraft = { id: string; termId: string; status: string; solverStatus: string; entries: TimetableEntry[] | Record<string, TimetableEntry>; diagnostics?: { code: string; message: string }[]; validation?: { valid: boolean } };
 type Interpretation = { original_text: string; changes: { subject_id: string; section_id: string; sessions_per_week?: number; preferred_faculty_ids: string[]; excluded_slot_ids: string[]; preferred_slot_ids: string[]; periods_per_session?: number; priority: string }[]; clarification_questions: string[]; unsupported_requirements: string[]; requires_review: boolean };
 type ParseResponse = { id: string; status: string; interpretation: Interpretation };
@@ -52,6 +54,8 @@ export default function Home() {
   const [signingIn, setSigningIn] = useState(false);
   const [data, setData] = useState<DashboardData | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [liveSyncError, setLiveSyncError] = useState("");
+  const [liveSyncReady, setLiveSyncReady] = useState(false);
   const [selectedTerm, setSelectedTerm] = useState("");
   const [requirementText, setRequirementText] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -85,6 +89,54 @@ export default function Home() {
     }).catch((error: unknown) => { if (!cancelled) setLoadError(error instanceof Error ? error.message : "The timetable backend could not be reached."); });
     return () => { cancelled = true; };
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !data?.terms) return;
+    let cancelled = false;
+    const cleanups: (() => void)[] = [];
+    const termIds = Object.keys(data.terms);
+    getIdTokenResult(user).then(({ claims }) => {
+      if (cancelled) return;
+      setLiveSyncReady(false);
+      const institutionId = typeof claims.institutionId === "string" ? claims.institutionId : "";
+      const departmentId = typeof claims.departmentId === "string" ? claims.departmentId : "";
+      const role = typeof claims.role === "string" ? claims.role : "";
+      if (!institutionId) return;
+      const db = getRealtimeDatabase();
+      const audiencePath = role === "STUDENT_VIEWER" && typeof claims.sectionId === "string"
+        ? `sections/${claims.sectionId}`
+        : role === "FACULTY" && typeof claims.facultyId === "string"
+          ? `faculty/${claims.facultyId}`
+          : role === "DEPARTMENT_ADMIN" && departmentId
+            ? `departments/${departmentId}`
+            : "";
+      const canReadInstitution = ["SUPER_ADMIN", "TIMETABLE_INCHARGE", "ACADEMIC_APPROVER"].includes(role);
+      if (!audiencePath && !canReadInstitution) return;
+      setLiveSyncError("");
+      for (const termId of termIds) {
+        const path = audiencePath
+          ? `institutions/${institutionId}/liveTimetables/${termId}/${audiencePath}`
+          : `institutions/${institutionId}/liveTimetableSnapshots/${termId}`;
+        cleanups.push(onValue(ref(db, path), (snapshot) => {
+          const live = snapshot.val() as { draftId?: string; publishedAt?: string; entries?: TimetableEntry[] | Record<string, TimetableEntry> } | null;
+          if (!cancelled) setLiveSyncReady(true);
+          if (cancelled || !live) return;
+          setData((current) => {
+            if (!current) return current;
+            const otherSchedules = list(current.publishedTimetables).filter((schedule) => schedule.termId !== termId);
+            return { ...current, publishedTimetables: [...otherSchedules, {
+              termId, draftId: live.draftId || "", publishedAt: live.publishedAt || "", entries: live.entries || [],
+            }] };
+          });
+        }, (error) => {
+          if (!cancelled) { setLiveSyncReady(false); setLiveSyncError(error.message || "Realtime Database denied the live schedule listener."); }
+        }));
+      }
+    }).catch((error: unknown) => {
+      if (!cancelled) setLiveSyncError(error instanceof Error ? error.message : "Realtime timetable updates could not connect.");
+    });
+    return () => { cancelled = true; cleanups.forEach((cleanup) => cleanup()); };
+  }, [user, data?.terms]);
 
   useEffect(() => {
     if (!user || !job?.jobId || !["QUEUED", "RUNNING"].includes(job.status)) return;
@@ -145,13 +197,27 @@ export default function Home() {
     catch (error) { setActionError(error instanceof Error ? error.message : "Could not search policy documents."); }
     finally { setBusy(false); }
   }
-  async function recommend(entry: TimetableEntry) {
-    if (!user || !activeSchedule) return;
-    const key = `${entry.requirement_id}-${entry.day}-${entry.period}`; setBusy(true); setActionError("");
+  async function reportAbsence(entry: TimetableEntry, reason: string) {
+    if (!user || !activeSchedule) return false;
+    setBusy(true); setActionError("");
+    const request = { termId: activeSchedule.termId, requirementId: entry.requirement_id, day: entry.day, period: entry.period };
     try {
-      const result = await backendRequest<SubstituteResult>(user, "/api/v1/substitutions/recommend", { method: "POST", body: JSON.stringify({ termId: activeSchedule.termId, requirementId: entry.requirement_id, day: entry.day, period: entry.period }) });
-      setSubstitutions((current) => ({ ...current, [key]: result }));
-    } catch (error) { setActionError(error instanceof Error ? error.message : "Could not rank available faculty."); }
+      await backendRequest(user, "/api/v1/absences", { method: "POST", body: JSON.stringify({ ...request, reason }) });
+      const result = await backendRequest<SubstituteResult>(user, "/api/v1/substitutions/recommend", { method: "POST", body: JSON.stringify(request) });
+      setSubstitutions((current) => ({ ...current, [`${entry.requirement_id}-${entry.day}-${entry.period}`]: result }));
+      return true;
+    } catch (error) { setActionError(error instanceof Error ? error.message : "Could not report this absence or find cover."); return false; }
+    finally { setBusy(false); }
+  }
+  async function assignSubstitute(entry: TimetableEntry, facultyId: string) {
+    if (!user || !activeSchedule) return;
+    setBusy(true); setActionError("");
+    try {
+      await backendRequest(user, "/api/v1/substitutions/assign", { method: "POST", body: JSON.stringify({ termId: activeSchedule.termId, requirementId: entry.requirement_id, day: entry.day, period: entry.period, facultyId }) });
+      const dashboard = await backendRequest<DashboardData>(user, "/api/v1/dashboard");
+      setData(dashboard);
+      setSubstitutions((current) => { const next = { ...current }; delete next[`${entry.requirement_id}-${entry.day}-${entry.period}`]; return next; });
+    } catch (error) { setActionError(error instanceof Error ? error.message : "Could not assign this substitute."); }
     finally { setBusy(false); }
   }
   async function transitionDraft(action: "approve" | "publish") {
@@ -180,17 +246,18 @@ export default function Home() {
   const currentJob = job?.jobId ? job : null;
   const canSchedule = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE"].includes(data?.role || "");
   const canReview = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE", "ACADEMIC_APPROVER"].includes(data?.role || "");
+  const canManageCoverage = ["SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE", "ACADEMIC_APPROVER"].includes(data?.role || "");
 
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#overview" aria-label="Riven Labs home"><span className="brand-mark"><span /></span><span><strong>riven</strong><small>ACADEMIC SYSTEMS</small></span></a>
       <div className="side-label">WORKSPACE</div>
-      <nav className="side-nav" aria-label="Main navigation"><a className="nav-link active" href="#overview"><Icon name="grid" />Overview</a><a className="nav-link" href="#timetable"><Icon name="calendar" />Timetable</a><a className="nav-link" href="#academics"><Icon name="users" />Academic data</a><a className="nav-link" href="#assistant"><Icon name="spark" />AI assistant<span className="nav-pill">NEW</span></a><a className="nav-link" href="#policies"><Icon name="book" />Policy library</a></nav>
+      <nav className="side-nav" aria-label="Main navigation"><a className="nav-link active" href="#overview"><Icon name="grid" />Overview</a><a className="nav-link" href="#timetable"><Icon name="calendar" />Timetable</a><a className="nav-link" href="#academic-data"><Icon name="users" />Academic data</a><a className="nav-link" href="#assistant"><Icon name="spark" />AI assistant<span className="nav-pill">NEW</span></a><a className="nav-link" href="#policies"><Icon name="book" />Policy library</a></nav>
       <div className="sidebar-bottom"><div className="sidebar-help"><div className="help-icon"><Icon name="spark" size={16} /></div><strong>Need a hand?</strong><p>Ask the policy assistant about your institution&apos;s scheduling rules.</p><a href="#policies">Open assistant <Icon name="arrow" size={14} /></a></div><button className="profile-row" onClick={() => signOut(getFirebaseAuth())} aria-label="Sign out"><span className="avatar">{initials(user)}</span><span className="profile-copy"><strong>{displayName}</strong><small>{roleName}</small></span><Icon name="logout" size={16} /></button></div>
     </aside>
 
     <main className="main-content" id="overview">
-      <header className="topbar"><div className="breadcrumbs">Workspace <Icon name="chevron" size={14} /> <strong>Overview</strong></div><div className="top-actions"><span className="secure-status"><i /> Firebase connected</span><button className="top-avatar" onClick={() => signOut(getFirebaseAuth())} aria-label={`Sign out, ${displayName}`} title="Sign out">{initials(user)}</button></div></header>
+      <header className="topbar"><div className="breadcrumbs">Workspace <Icon name="chevron" size={14} /> <strong>Overview</strong></div><div className="top-actions"><span className={`secure-status ${liveSyncError ? "secure-warning" : ""}`} title={liveSyncError || "Published timetables sync from Firebase Realtime Database."}><i /> {liveSyncError ? "Live sync needs setup" : liveSyncReady ? "Realtime connected" : "Connecting realtime"}</span><button className="top-avatar" onClick={() => signOut(getFirebaseAuth())} aria-label={`Sign out, ${displayName}`} title="Sign out">{initials(user)}</button></div></header>
       <div className="page-wrap">
         <section className="welcome-row"><div><p className="eyebrow">ACADEMIC OPERATIONS</p><h1>Good day, {displayName.split(" ")[0]}<span className="greeting-dot">.</span></h1><p className="welcome-sub">Here&apos;s what&apos;s happening across {data?.institutionName || "your institution"}.</p></div>{canSchedule && <button className="button button-primary" onClick={() => document.getElementById("assistant")?.scrollIntoView({ behavior: "smooth" })}><Icon name="spark" size={16} />Generate a timetable <Icon name="arrow" size={15} /></button>}</section>
         {loadError && <div className="alert alert-error" role="alert"><strong>Backend connection issue</strong><span>{loadError}</span><button onClick={() => user && backendRequest<DashboardData>(user, "/api/v1/dashboard").then(setData).catch((error) => setLoadError(error.message))}>Try again</button></div>}
@@ -200,9 +267,11 @@ export default function Home() {
 
         <section className="metrics-grid" id="academics" aria-label="Academic data summary"><MetricCard title="Faculty members" value={data?.counts.faculty} icon="users" tone="mint" detail="In your academic data" /><MetricCard title="Subjects" value={data?.counts.subjects} icon="book" tone="lavender" detail="Available to schedule" /><MetricCard title="Student sections" value={data?.counts.sections} icon="grid" tone="peach" detail="Across departments" /><MetricCard title="Timetable drafts" value={data?.counts.drafts} icon="calendar" tone="blue" detail="Ready for review" /></section>
 
+        {canSchedule && <AcademicWorkspace user={user} role={data?.role || ""} onSaved={() => { void backendRequest<DashboardData>(user, "/api/v1/dashboard").then(setData).catch((error) => setLoadError(error.message)); }} />}
+
         <div className="content-grid">
           <section className="panel schedule-panel" id="timetable"><div className="panel-heading"><div><p className="eyebrow">LIVE SCHEDULE</p><h3>Published timetable</h3></div>{activeSchedule && <span className="status-badge published"><i />Published</span>}</div>
-            {activeSchedule ? <><p className="panel-note">Academic term <strong>{activeSchedule.termId}</strong> · {activeEntries.length} scheduled sessions</p><div className="schedule-list">{activeEntries.slice(0, 7).map((entry, index) => { const key = `${entry.requirement_id}-${entry.day}-${entry.period}`; const cover = substitutions[key]; return <div className="schedule-row" key={`${key}-${index}`}><div className={`subject-color color-${index % 5}`}><Icon name="book" size={16} /></div><div className="schedule-info"><strong>{entry.subject_name || entry.subject_id}</strong><span>{entry.section_id} · {entry.day} · Period {entry.period}{entry.duration > 1 ? `–${entry.period + entry.duration - 1}` : ""}</span></div><div className="schedule-room">{entry.room_id}</div>{!["STUDENT_VIEWER", "FACULTY"].includes(data?.role || "") && <button className="icon-button cover-button" onClick={() => recommend(entry)} disabled={busy} title="Recommend a substitute" aria-label={`Recommend a substitute for ${entry.subject_name || entry.subject_id}`}><Icon name="users" size={16} /></button>}{cover && <div className="cover-popover"><b>Eligible substitutes</b>{cover.candidates.length ? cover.candidates.slice(0, 3).map((candidate) => <p key={candidate.id}>{candidate.name}<span>{candidate.score.toFixed(1)} pts</span></p>) : <small>No eligible candidates for this period.</small>}</div>}</div>; })}{!activeEntries.length && <EmptyLine text="The published version has no scheduled sessions." />}</div></> : <EmptyState icon="calendar" title="No published timetable yet" body="Once a reviewed draft is approved and published, the active schedule will appear here." />}
+            {activeSchedule ? <><p className="panel-note">Academic term <strong>{activeSchedule.termId}</strong> · {activeEntries.length} scheduled sessions</p><TimetableBoard entries={activeEntries} termId={activeSchedule.termId} canRecommend={canManageCoverage || data?.role === "FACULTY"} canAssign={canManageCoverage} busy={busy} substitutions={substitutions} onReportAbsence={reportAbsence} onAssignSubstitute={assignSubstitute} /></> : <EmptyState icon="calendar" title="No published timetable yet" body="Once a reviewed draft is approved and published, the active schedule will appear here." />}
           </section>
 
           {canSchedule && <section className="panel assistant-panel" id="assistant"><div className="panel-heading"><div><p className="eyebrow">CONSTRAINT-BASED PLANNING</p><h3>Timetable copilot</h3></div><span className="ai-badge"><Icon name="spark" size={14} /> AI + CP-SAT</span></div><p className="assistant-intro">Describe what needs to be scheduled. AI translates it into a reviewable request; the solver checks hard constraints.</p>
@@ -224,6 +293,42 @@ export default function Home() {
 
 function MetricCard({ title, value, icon, tone, detail }: { title: string; value?: number; icon: string; tone: string; detail: string }) {
   return <article className="metric-card"><div className={`metric-icon ${tone}`}><Icon name={icon} size={18} /></div><div className="metric-value">{value === undefined ? "—" : value}</div><div className="metric-title">{title}</div><div className="metric-detail">{detail}</div></article>;
+}
+function TimetableBoard({ entries, termId, canRecommend, canAssign, busy, substitutions, onReportAbsence, onAssignSubstitute }: { entries: TimetableEntry[]; termId: string; canRecommend: boolean; canAssign: boolean; busy: boolean; substitutions: Record<string, SubstituteResult>; onReportAbsence: (entry: TimetableEntry, reason: string) => Promise<boolean>; onAssignSubstitute: (entry: TimetableEntry, facultyId: string) => void }) {
+  const [section, setSection] = useState("all");
+  const [faculty, setFaculty] = useState("all");
+  const [reporting, setReporting] = useState<TimetableEntry | null>(null);
+  const [reason, setReason] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const sections = [...new Set(entries.map((entry) => entry.section_id).filter(Boolean))].sort();
+  const facultyMembers = [...new Set(entries.map((entry) => entry.faculty_id).filter(Boolean))].sort();
+  const visible = entries.filter((entry) => (section === "all" || entry.section_id === section) && (faculty === "all" || entry.faculty_id === faculty));
+  const days = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].filter((day) => visible.some((entry) => entry.day.slice(0, 3).toUpperCase() === day));
+  const periods = [...new Set(visible.map((entry) => entry.period))].sort((a, b) => a - b);
+
+  function exportCsv() {
+    const fields = ["day", "period", "duration", "subject", "section", "faculty", "room"];
+    const escape = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    const rows = visible.map((entry) => [entry.day, entry.period, entry.duration, entry.subject_name || entry.subject_id, entry.section_id, entry.faculty_id, entry.room_id].map(escape).join(","));
+    const blob = new Blob([`\uFEFF${fields.join(",")}\r\n${rows.join("\r\n")}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a"); link.href = url; link.download = `timetable-${termId}.csv`; link.click(); URL.revokeObjectURL(url);
+  }
+
+  async function submitAbsence() {
+    if (!reporting || reason.trim().length < 3) return;
+    setReportBusy(true);
+    const saved = await onReportAbsence(reporting, reason.trim());
+    setReportBusy(false);
+    if (saved) { setReporting(null); setReason(""); }
+  }
+
+  return <div className="timetable-board">
+    <div className="timetable-toolbar"><div className="timetable-filters"><label>Section<select value={section} onChange={(event) => setSection(event.target.value)}><option value="all">All sections</option>{sections.map((value) => <option key={value}>{value}</option>)}</select></label><label>Faculty<select value={faculty} onChange={(event) => setFaculty(event.target.value)}><option value="all">All faculty</option>{facultyMembers.map((value) => <option key={value}>{value}</option>)}</select></label></div><button className="button button-light csv-button" type="button" onClick={exportCsv} disabled={!visible.length}>Export CSV</button></div>
+    {!visible.length ? <EmptyLine text="No classes match the selected filters." /> : <div className="timetable-scroll"><table className="timetable-table"><thead><tr><th>Period</th>{days.map((day) => <th key={day}>{day}</th>)}</tr></thead><tbody>{periods.map((period) => <tr key={period}><th scope="row">{period}</th>{days.map((day) => { const cellEntries = visible.filter((item) => item.day.slice(0, 3).toUpperCase() === day && item.period === period); return <td key={day} className={cellEntries.length ? "" : "timetable-empty-cell"}>{cellEntries.map((entry) => { const key = `${entry.requirement_id}-${entry.day}-${entry.period}`; const result = substitutions[key]; return <article className="timetable-class" key={key}><strong>{entry.subject_name || entry.subject_id}{entry.substitute ? " · COVER" : ""}</strong><span>{entry.section_id} · {entry.room_id}</span><small>{entry.faculty_name || entry.faculty_id} · {entry.duration > 1 ? `${entry.duration} periods` : "1 period"}</small>{canRecommend && !entry.substitute && <button type="button" onClick={() => { setReporting(entry); setReason(""); }} disabled={busy}>Report absence &amp; find cover</button>}{result && <div className="substitute-results">{result.candidates.length ? result.candidates.slice(0, 3).map((candidate) => <p key={candidate.id}><span><b>{candidate.name}</b><small>{candidate.reasons?.slice(0, 2).join(" · ")}</small></span>{canAssign && <button type="button" disabled={busy} onClick={() => onAssignSubstitute(entry, candidate.id)}>Assign</button>}</p>) : <small>No eligible faculty available.</small>}</div>}</article>; })}</td>; })}</tr>)}</tbody></table></div>}
+    <p className="timetable-footnote">Showing {visible.length} of {entries.length} sessions · updates follow the published Realtime Database version.</p>
+    {reporting && <div className="absence-backdrop"><section className="absence-dialog" role="dialog" aria-modal="true" aria-labelledby="absence-title"><p className="eyebrow">FACULTY COVERAGE</p><h4 id="absence-title">Report a class absence</h4><p className="absence-class-label">{reporting.subject_name || reporting.subject_id} · {reporting.section_id} · {reporting.day} period {reporting.period}</p><label htmlFor="absence-reason">Reason for absence</label><textarea id="absence-reason" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="Add a short note for the timetable team…" autoFocus /><div className="absence-actions"><button type="button" className="button button-light" onClick={() => setReporting(null)} disabled={reportBusy}>Cancel</button><button type="button" className="button button-primary" onClick={() => void submitAbsence()} disabled={reportBusy || reason.trim().length < 3}>{reportBusy ? "Finding cover…" : "Report & find cover"}</button></div></section></div>}
+  </div>;
 }
 function EmptyState({ icon, title, body }: { icon: string; title: string; body: string }) { return <div className="empty-state"><span className="empty-icon"><Icon name={icon} size={21} /></span><strong>{title}</strong><p>{body}</p></div>; }
 function EmptyLine({ text }: { text: string }) { return <p className="empty-line">{text}</p>; }

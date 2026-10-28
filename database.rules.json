@@ -1,6 +1,38 @@
 {
   "rules": {
     ".read": false,
-    ".write": false
+    ".write": false,
+    "institutions": {
+      "$institutionId": {
+        "liveTimetableSnapshots": {
+          "$termId": {
+            ".read": "auth != null && auth.token.institutionId === $institutionId && (auth.token.role === 'SUPER_ADMIN' || auth.token.role === 'TIMETABLE_INCHARGE' || auth.token.role === 'ACADEMIC_APPROVER')",
+            ".write": false
+          }
+        },
+        "liveTimetables": {
+          "$termId": {
+            "sections": {
+              "$sectionId": {
+                ".read": "auth != null && auth.token.institutionId === $institutionId && (auth.token.role === 'SUPER_ADMIN' || auth.token.role === 'TIMETABLE_INCHARGE' || auth.token.role === 'ACADEMIC_APPROVER' || (auth.token.role === 'STUDENT_VIEWER' && auth.token.sectionId === $sectionId))",
+                ".write": false
+              }
+            },
+            "faculty": {
+              "$facultyId": {
+                ".read": "auth != null && auth.token.institutionId === $institutionId && (auth.token.role === 'SUPER_ADMIN' || auth.token.role === 'TIMETABLE_INCHARGE' || auth.token.role === 'ACADEMIC_APPROVER' || (auth.token.role === 'FACULTY' && auth.token.facultyId === $facultyId))",
+                ".write": false
+              }
+            },
+            "departments": {
+              "$departmentId": {
+                ".read": "auth != null && auth.token.institutionId === $institutionId && (auth.token.role === 'SUPER_ADMIN' || auth.token.role === 'TIMETABLE_INCHARGE' || auth.token.role === 'ACADEMIC_APPROVER' || (auth.token.role === 'DEPARTMENT_ADMIN' && auth.token.departmentId === $departmentId))",
+                ".write": false
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
