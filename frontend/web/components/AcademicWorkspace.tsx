@@ -294,7 +294,7 @@ function SchedulingInputEditor({ user, writable }: { user: User; writable: boole
       sessions_per_week: Number(subject.sessions_per_week || 1), faculty_ids: Array.isArray(subject.faculty_ids) ? subject.faculty_ids : faculty.filter((member) => member.qualified_subject_ids.includes(subject.id)).map((member) => member.id),
       room_type: subject.room_type || "CLASSROOM", required_equipment: subject.required_equipment || [], periods_per_session: Number(subject.periods_per_session || (String(subject.room_type || "CLASSROOM").toUpperCase().includes("LAB") ? 2 : 1)), preferred_slot_ids: [], excluded_slot_ids: [],
     })));
-    let time_slots;
+    let time_slots: ReturnType<typeof hourlySlots>;
     try { time_slots = hourlySlots(shifts); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Check the shift time ranges."); return; }
     setJson(JSON.stringify({ shifts, time_slots, sections, faculty, rooms, requirements }, null, 2));
