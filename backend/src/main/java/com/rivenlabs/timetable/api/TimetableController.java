@@ -38,6 +38,10 @@ public class TimetableController {
                 || !request.termId().equals(interpretation.get("termId"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This interpretation is no longer pending review for the selected term.");
         }
+        if ("DEPARTMENT_ADMIN".equals(principal.role())
+                && !Objects.equals(principal.departmentId(), interpretation.get("departmentId"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only generate a timetable from an interpretation for your department.");
+        }
         if (!principal.uid().equals(interpretation.get("createdBy")) && !SetHolder.ADMIN_ROLES.contains(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the interpreter or a department administrator can apply this review.");
         }
@@ -61,6 +65,10 @@ public class TimetableController {
     public Map<String, Object> job(@AuthenticationPrincipal AppPrincipal principal, @PathVariable String jobId) {
         Map<String, Object> result = database.readMap(database.tenantPath(principal.institutionId(), "generationJobs", jobId));
         if (result.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Generation job not found.");
+        if ("DEPARTMENT_ADMIN".equals(principal.role())
+                && !Objects.equals(principal.departmentId(), result.get("departmentId"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot read a timetable job from another department.");
+        }
         if (!principal.uid().equals(result.get("createdBy")) && !SetHolder.ADMIN_ROLES.contains(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot read this generation job.");
         }
@@ -73,6 +81,9 @@ public class TimetableController {
         if (result.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Timetable draft not found.");
         boolean reviewer = "SUPER_ADMIN".equals(principal.role()) || "ACADEMIC_APPROVER".equals(principal.role());
         boolean ownDepartment = "DEPARTMENT_ADMIN".equals(principal.role()) && Objects.equals(principal.departmentId(), result.get("departmentId"));
+        if ("DEPARTMENT_ADMIN".equals(principal.role()) && !ownDepartment) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only view timetable drafts for your department.");
+        }
         if (!principal.uid().equals(result.get("generatedBy")) && !reviewer && !ownDepartment) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot view this timetable draft.");
         }

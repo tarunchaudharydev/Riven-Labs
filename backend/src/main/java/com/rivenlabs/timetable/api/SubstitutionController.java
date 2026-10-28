@@ -58,14 +58,13 @@ public class SubstitutionController {
         }
         List<String> slotIds = strings(affected.get("slot_ids"));
         Map<String, Map<String, Object>> members = byId(problem.get("faculty"));
-        Map<String, Object> missingFaculty = members.getOrDefault(missingFacultyId, Map.of());
-        String departmentId = Objects.toString(missingFaculty.get("department_id"), "");
+        String departmentId = Objects.toString(affected.get("department_id"), "");
         Set<String> authorizedFaculty = new HashSet<>(strings(req.get("faculty_ids")));
         List<Map<String, Object>> candidates = new ArrayList<>();
         for (Map<String, Object> member : members.values()) {
             String id = Objects.toString(member.get("id"), "");
             if (id.isBlank() || id.equals(missingFacultyId)) continue;
-            boolean qualified = authorizedFaculty.contains(id) && strings(member.get("qualified_subject_ids")).contains(Objects.toString(req.get("subject_id"), ""));
+            boolean qualified = authorizedFaculty.contains(id);
             boolean available = Boolean.TRUE.equals(member.getOrDefault("active", true))
                     && Collections.disjoint(slotIds, strings(member.get("unavailable_slot_ids")))
                     && entries.stream().filter(entry -> id.equals(entry.get("faculty_id")))
@@ -78,6 +77,9 @@ public class SubstitutionController {
             Map<String, Object> candidate = new LinkedHashMap<>();
             candidate.put("id", id); candidate.put("name", member.getOrDefault("name", id));
             candidate.put("department_id", member.getOrDefault("department_id", ""));
+            candidate.put("department_name", member.getOrDefault("department_name", ""));
+            candidate.put("department_code", member.getOrDefault("department_code", ""));
+            candidate.put("department_block_no", member.getOrDefault("department_block_no", ""));
             candidate.put("qualified", qualified); candidate.put("available", available);
             candidate.put("remaining_periods", Math.max(0, maximum - workload)); candidate.put("max_weekly_periods", maximum);
             candidate.put("section_familiarity", sectionClasses > 0 ? 100 : Math.min(100, number(member.get("section_familiarity_score"))));
@@ -113,7 +115,6 @@ public class SubstitutionController {
         if ("DEPARTMENT_ADMIN".equals(principal.role()) && !Objects.equals(principal.departmentId(), affected.get("department_id"))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only assign substitutes in your department.");
         }
-        String subjectId = Objects.toString(requirement.get("subject_id"), "");
         String originalFacultyId = Objects.toString(affected.get("faculty_id"), "");
         Map<String, Map<String, Object>> members = byId(problem.get("faculty"));
         Map<String, Object> candidate = members.get(request.facultyId());
@@ -121,8 +122,7 @@ public class SubstitutionController {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Select a different faculty member from the approved faculty list.");
         }
         List<String> authorizedFaculty = strings(requirement.get("faculty_ids"));
-        List<String> qualifiedSubjects = strings(candidate.get("qualified_subject_ids"));
-        if (!authorizedFaculty.contains(request.facultyId()) || !qualifiedSubjects.contains(subjectId)) {
+        if (!authorizedFaculty.contains(request.facultyId())) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "The selected faculty member is not authorized for this subject.");
         }
         List<String> slotIds = strings(affected.get("slot_ids"));

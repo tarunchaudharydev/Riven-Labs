@@ -7,19 +7,19 @@ import { backendRequest } from "../lib/backend";
 import styles from "./AcademicWorkspace.module.css";
 
 type CollectionKey = "departments" | "academicTerms" | "faculty" | "subjects" | "sections" | "rooms";
-type Field = { key: string; label: string; hint?: string; type?: "text" | "number" | "email" | "checkbox"; required?: boolean };
+type Field = { key: string; label: string; hint?: string; type?: "text" | "number" | "email" | "tel" | "checkbox"; required?: boolean };
 type Resource = { title: string; description: string; singular: string; fields: Field[] };
 type AcademicRecord = Record<string, unknown> & { id: string; name: string };
 
 const resources: Record<CollectionKey, Resource> = {
   departments: { title: "Departments", singular: "department", description: "Organize the institution into academic units.", fields: [
-    { key: "name", label: "Department name", required: true }, { key: "code", label: "Department code", required: true }, { key: "admin_uid", label: "Department administrator UID", hint: "Optional Firebase Auth UID" },
+    { key: "name", label: "Department name", required: true }, { key: "code", label: "Department code", required: true }, { key: "block_no", label: "Block number", hint: "Two digits shared across the institution, e.g. 01", required: true }, { key: "admin_uid", label: "Department administrator UID", hint: "Optional Firebase Auth UID" },
   ] },
   academicTerms: { title: "Academic terms", singular: "term", description: "Create the periods for which timetables and scheduling inputs are maintained.", fields: [
     { key: "name", label: "Term name", required: true }, { key: "academic_year", label: "Academic year", required: true }, { key: "status", label: "Status", hint: "For example: ACTIVE, DRAFT, ARCHIVED" }, { key: "start_date", label: "Start date", type: "text" }, { key: "end_date", label: "End date", type: "text" },
   ] },
   faculty: { title: "Faculty", singular: "faculty member", description: "Track qualified subjects, weekly teaching limits, and availability.", fields: [
-    { key: "name", label: "Full name", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or initials" }, { key: "department_id", label: "Department ID", required: true }, { key: "email", label: "Work email", type: "email" }, { key: "max_weekly_periods", label: "Maximum weekly periods", type: "number", required: true }, { key: "qualified_subject_ids", label: "Qualified subject IDs", hint: "Comma-separated IDs" }, { key: "unavailable_slot_ids", label: "Unavailable slot IDs", hint: "Comma-separated IDs" }, { key: "preferred_slot_ids", label: "Preferred slot IDs", hint: "Comma-separated IDs" }, { key: "active", label: "Active faculty", type: "checkbox" },
+    { key: "name", label: "Full name", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or initials" }, { key: "department_id", label: "Department ID", required: true }, { key: "mobile_number", label: "Mobile number", type: "tel", required: true }, { key: "college_email", label: "College email", type: "email", required: true }, { key: "personal_email", label: "Personal email (optional)", type: "email" }, { key: "max_weekly_periods", label: "Maximum weekly periods", type: "number", required: true }, { key: "qualified_subject_ids", label: "Qualified subject IDs", hint: "Comma-separated IDs" }, { key: "unavailable_slot_ids", label: "Unavailable slot IDs", hint: "Comma-separated IDs" }, { key: "preferred_slot_ids", label: "Preferred slot IDs", hint: "Comma-separated IDs" }, { key: "active", label: "Active faculty", type: "checkbox" },
   ] },
   subjects: { title: "Subjects", singular: "subject", description: "Set course identifiers, workload requirements, and room constraints.", fields: [
     { key: "name", label: "Subject name", required: true }, { key: "code", label: "Subject code", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or abbreviations" }, { key: "department_id", label: "Department ID", required: true }, { key: "term_id", label: "Academic term ID" }, { key: "faculty_ids", label: "Eligible faculty IDs", hint: "Comma-separated IDs" }, { key: "sessions_per_week", label: "Sessions per week", type: "number" }, { key: "periods_per_session", label: "Periods per session", type: "number" }, { key: "room_type", label: "Required room type", hint: "CLASSROOM or LAB" }, { key: "required_equipment", label: "Required equipment", hint: "Comma-separated values" },
@@ -47,8 +47,24 @@ export default function AcademicWorkspace({ user, role, onSaved }: { user: User;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [ownDepartmentId, setOwnDepartmentId] = useState("");
   const resource = resources[collection];
   const writable = role === "SUPER_ADMIN" || role === "DEPARTMENT_ADMIN";
+  const canWriteCollection = writable && !(role === "DEPARTMENT_ADMIN" && collection === "departments");
+
+  useEffect(() => {
+    if (role !== "DEPARTMENT_ADMIN") { setOwnDepartmentId(""); return; }
+    let cancelled = false;
+    backendRequest<Record<string, AcademicRecord>>(user, "/api/v1/academics/departments")
+      .then((result) => {
+        if (cancelled) return;
+        const [id] = Object.keys(result || {});
+        setOwnDepartmentId(id || "");
+        if (id) setForm((current) => current.department_id ? current : { ...current, department_id: id });
+      })
+      .catch((caught) => { if (!cancelled) setError(caught instanceof Error ? caught.message : "Could not load your department assignment."); });
+    return () => { cancelled = true; };
+  }, [role, user]);
 
   const load = useCallback(async () => {
     try {
@@ -71,15 +87,23 @@ export default function AcademicWorkspace({ user, role, onSaved }: { user: User;
   }, [collection, user]);
 
   const sortedRecords = useMemo(() => [...records].sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id))), [records]);
+  const canManageRecord = (record: AcademicRecord) => canWriteCollection
+    && (role !== "DEPARTMENT_ADMIN" || collection !== "faculty" || record.department_id === ownDepartmentId);
+
+  function freshForm(forResource: Resource) {
+    const next = emptyForm(forResource);
+    if (role === "DEPARTMENT_ADMIN" && "department_id" in next) next.department_id = ownDepartmentId;
+    return next;
+  }
 
   function startNew() {
-    setRecordId(""); setForm(emptyForm(resource)); setEditing(false); setError(""); setNotice("");
+    setRecordId(""); setForm(freshForm(resource)); setEditing(false); setError(""); setNotice("");
   }
 
   function startEdit(record: AcademicRecord) {
     const next = emptyForm(resource);
     for (const field of resource.fields) {
-      const value = record[field.key];
+      const value = field.key === "college_email" ? record.college_email || record.email : record[field.key];
       if (Array.isArray(value)) next[field.key] = value.join(", ");
       else if (typeof value === "boolean") next[field.key] = value;
       else if (value != null) next[field.key] = String(value);
@@ -125,7 +149,7 @@ export default function AcademicWorkspace({ user, role, onSaved }: { user: User;
   }
 
   function changeCollection(next: CollectionKey) {
-    setCollection(next); setLoading(true); setForm(emptyForm(resources[next])); setRecordId(""); setEditing(false); setError(""); setNotice("");
+    setCollection(next); setLoading(true); setForm(freshForm(resources[next])); setRecordId(""); setEditing(false); setError(""); setNotice("");
   }
 
   return <section className={styles.workspace} id="academic-data">
@@ -141,13 +165,15 @@ export default function AcademicWorkspace({ user, role, onSaved }: { user: User;
         <div className={styles.listHeading}><div><h3>{resource.title}</h3><p>{resource.description}</p></div><span>{records.length} records</span></div>
         {error && <p className={styles.error} role="alert">{error}</p>}
         {notice && <p className={styles.notice} role="status">{notice}</p>}
-        {loading ? <div className={styles.empty}>Loading records…</div> : sortedRecords.length ? <div className={styles.records}>
-          {sortedRecords.map((record) => <article className={styles.record} key={record.id}><div><strong>{record.name || record.id}</strong><small>{record.code ? `${record.code} · ` : ""}{record.id}{record.department_id ? ` · ${String(record.department_id)}` : ""}</small></div><div className={styles.recordActions}><button type="button" onClick={() => startEdit(record)}>Edit</button>{writable && <button type="button" className={styles.delete} onClick={() => void remove(record)}>Delete</button>}</div></article>)}
+        {loading ? <div className={styles.empty}>Loading records…</div> : sortedRecords.length ? collection === "faculty" ? <div className={styles.tableScroll}><table className={styles.facultyTable}><thead><tr><th>Teacher</th><th>Department</th><th>Mobile</th><th>College email</th><th>Personal email</th><th>Actions</th></tr></thead><tbody>
+          {sortedRecords.map((record) => { const canManage = canManageRecord(record); const block = String(record.department_block_no || ""); return <tr key={record.id}><td><strong>{record.name || record.id}</strong><small>{record.code ? `${record.code} · ` : ""}{record.id}</small></td><td><strong>{String(record.department_name || record.department_id || "Unassigned")}</strong><small>{record.department_code ? `${String(record.department_code)} · ` : ""}{block ? `Block ${block}` : "Block not set"}</small></td><td>{String(record.mobile_number || "—")}</td><td>{String(record.college_email || record.email || "—")}</td><td>{String(record.personal_email || "—")}</td><td>{canManage ? <div className={styles.recordActions}><button type="button" onClick={() => startEdit(record)}>Edit</button><button type="button" className={styles.delete} onClick={() => void remove(record)}>Delete</button></div> : <span className={styles.viewOnly}>Coverage roster</span>}</td></tr>; })}
+        </tbody></table></div> : <div className={styles.records}>
+          {sortedRecords.map((record) => <article className={styles.record} key={record.id}><div><strong>{record.name || record.id}</strong><small>{record.code ? `${record.code} · ` : ""}{record.id}{record.block_no ? ` · Block ${String(record.block_no)}` : ""}{record.department_id ? ` · ${String(record.department_id)}` : ""}</small></div><div className={styles.recordActions}>{canManageRecord(record) && <><button type="button" onClick={() => startEdit(record)}>Edit</button><button type="button" className={styles.delete} onClick={() => void remove(record)}>Delete</button></>}</div></article>)}
         </div> : <div className={styles.empty}><strong>No {resource.title.toLowerCase()} yet</strong><span>Add the first record to start building your academic catalog.</span></div>}
       </div>
-      {writable && <form className={styles.formPane} onSubmit={save}>
+      {canWriteCollection && <form className={styles.formPane} onSubmit={save}>
         <div className={styles.formHeading}><div><h3>{editing ? `Edit ${resource.singular}` : `Add ${resource.singular}`}</h3><p>{editing ? `Record ID: ${recordId}` : "New records are stored in your institution’s Realtime Database."}</p></div>{editing && <button type="button" onClick={startNew} className={styles.cancel}>Cancel</button>}</div>
-        <div className={styles.fields}>{resource.fields.map((field) => field.type === "checkbox" ? <label className={styles.checkbox} key={field.key}><input type="checkbox" checked={Boolean(form[field.key])} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.checked }))} /><span>{field.label}</span></label> : <label className={styles.field} key={field.key}><span>{field.label}{field.required && <i> *</i>}</span><input type={field.type || "text"} required={field.required} min={field.type === "number" ? 1 : undefined} value={String(form[field.key] || "")} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.value }))} placeholder={field.hint || "Enter a value"} /></label>)}</div>
+        <div className={styles.fields}>{resource.fields.map((field) => field.type === "checkbox" ? <label className={styles.checkbox} key={field.key}><input type="checkbox" checked={Boolean(form[field.key])} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.checked }))} /><span>{field.label}</span></label> : <label className={styles.field} key={field.key}><span>{field.label}{field.required && <i> *</i>}</span><input type={field.type || "text"} required={field.required} min={field.type === "number" ? 1 : undefined} readOnly={role === "DEPARTMENT_ADMIN" && field.key === "department_id"} value={String(form[field.key] || "")} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.value }))} placeholder={field.hint || "Enter a value"} /></label>)}</div>
         <div className={styles.formFooter}><p>ID is generated from the code, or from the name if no code is provided.</p><button type="submit" disabled={saving}>{saving ? "Saving…" : editing ? "Save changes" : `Add ${resource.singular}`}</button></div>
       </form>}
     </div>
@@ -192,7 +218,7 @@ function SchedulingInputEditor({ user, writable }: { user: User; writable: boole
     const values = (key: string) => Object.values(catalog[key] || {});
     const sectionRecords = values("sections").filter((row) => !row.term_id || row.term_id === termId);
     const sections = sectionRecords.map((row) => ({ id: row.id, name: row.name, code: row.code || "", aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", student_count: Number(row.student_count || 0) }));
-    const faculty = values("faculty").map((row) => ({ id: row.id, name: row.name, aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", qualified_subject_ids: Array.isArray(row.qualified_subject_ids) ? row.qualified_subject_ids.filter((id): id is string => typeof id === "string") : [], unavailable_slot_ids: row.unavailable_slot_ids || [], preferred_slot_ids: row.preferred_slot_ids || [], max_weekly_periods: Number(row.max_weekly_periods || 18), active: row.active !== false }));
+    const faculty = values("faculty").map((row) => ({ id: row.id, name: row.name, aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", department_name: row.department_name || "", department_code: row.department_code || "", department_block_no: row.department_block_no || "", qualified_subject_ids: Array.isArray(row.qualified_subject_ids) ? row.qualified_subject_ids.filter((id): id is string => typeof id === "string") : [], unavailable_slot_ids: row.unavailable_slot_ids || [], preferred_slot_ids: row.preferred_slot_ids || [], max_weekly_periods: Number(row.max_weekly_periods || 18), active: row.active !== false }));
     const rooms = values("rooms").map((row) => ({ id: row.id, name: row.name, code: row.code || "", capacity: Number(row.capacity || 0), room_type: row.room_type || "CLASSROOM", equipment: row.equipment || [], unavailable_slot_ids: row.unavailable_slot_ids || [] }));
     const subjects = values("subjects").filter((row) => !row.term_id || row.term_id === termId);
     const requirements = subjects.flatMap((subject) => sectionRecords.filter((section) => !subject.department_id || section.department_id === subject.department_id).map((section) => ({

@@ -27,6 +27,7 @@ public class SchedulingInputService {
         for (String collection : List.of("time_slots", "sections", "faculty", "rooms", "requirements")) {
             input.put(collection, normalize(input.get(collection)));
         }
+        attachDepartmentDetails(input, principal.institutionId());
         if ("DEPARTMENT_ADMIN".equals(principal.role())) input = scopeToDepartment(principal, input);
         input.put("term_id", termId);
         return input;
@@ -116,9 +117,10 @@ public class SchedulingInputService {
         List<String> sectionIds = sections.stream().map(item -> Objects.toString(item.get("id"), "")).toList();
         requirements = requirements.stream().filter(req -> sectionIds.contains(Objects.toString(req.get("section_id"), ""))).toList();
         if (requirements.isEmpty()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No scheduling requirements are assigned to your department.");
-        List<Map<String, Object>> faculty = maps(scoped.get("faculty")).stream()
-                .filter(item -> departmentId.equals(item.get("department_id"))).toList();
-        List<String> facultyIds = faculty.stream().map(item -> Objects.toString(item.get("id"), "")).toList();
+        // Keep all teachers available for cross-department class coverage. Requirements,
+        // sections, and subjects above remain limited to this administrator's department.
+        List<Map<String, Object>> faculty = maps(scoped.get("faculty"));
+        Set<String> facultyIds = new HashSet<>(faculty.stream().map(item -> Objects.toString(item.get("id"), "")).toList());
         for (Map<String, Object> req : requirements) {
             if (!facultyIds.containsAll(listStrings(req.get("faculty_ids")))) {
                 req.put("faculty_ids", listStrings(req.get("faculty_ids")).stream().filter(facultyIds::contains).toList());
@@ -133,6 +135,21 @@ public class SchedulingInputService {
         return scoped;
     }
 
+    private void attachDepartmentDetails(Map<String, Object> input, String institutionId) {
+        Map<String, Object> departments = database.readMap(database.tenantPath(institutionId, "departments"));
+        List<Map<String, Object>> faculty = maps(input.get("faculty"));
+        for (Map<String, Object> member : faculty) {
+            Map<String, Object> department = asMap(departments.get(Objects.toString(member.get("department_id"), "")));
+            if (!department.isEmpty()) {
+                member.put("department_name", department.getOrDefault("name", ""));
+                member.put("department_code", department.getOrDefault("code", ""));
+                String blockNo = Objects.toString(department.get("block_no"), "");
+                member.put("department_block_no", blockNo.matches("[0-9]") ? "0" + blockNo : blockNo);
+            }
+        }
+        input.put("faculty", faculty);
+    }
+
     private List<String> listStrings(Object value) { return value instanceof List<?> list ? list.stream().filter(String.class::isInstance).map(String.class::cast).toList() : List.of(); }
 
     private List<Map<String, Object>> entities(Object raw, boolean includeDepartment) {
@@ -143,7 +160,12 @@ public class SchedulingInputService {
             if (item.get("name") != null) entity.put("name", item.get("name"));
             putIfPresent(entity, item, "code");
             putIfPresent(entity, item, "aliases");
-            if (includeDepartment && item.get("department_id") != null) entity.put("department_id", item.get("department_id"));
+            if (includeDepartment) {
+                putIfPresent(entity, item, "department_id");
+                putIfPresent(entity, item, "department_name");
+                putIfPresent(entity, item, "department_code");
+                putIfPresent(entity, item, "department_block_no");
+            }
             if (item.get("day") != null) {
                 entity.put("day", item.get("day"));
                 putIfPresent(entity, item, "period");
@@ -184,5 +206,10 @@ public class SchedulingInputService {
 
     private void putIfPresent(Map<String, Object> target, Map<String, Object> source, String key) {
         if (source.get(key) != null) target.put(key, source.get(key));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object value) {
+        return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
     }
 }
