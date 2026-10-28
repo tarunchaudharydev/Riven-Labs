@@ -31,7 +31,7 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/v1/health", "/error").permitAll()
+                        .requestMatchers("/api/v1/health", "/error", "/api/v1/calendar/feeds/*/*/*.ics").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(firebaseFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();

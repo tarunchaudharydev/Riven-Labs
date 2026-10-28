@@ -75,9 +75,11 @@ class GeminiProvider:
         self.model = settings.gemini_model
 
     async def parse_timetable_requirement(self, user_input: str, catalog: RequirementCatalog) -> RequirementInterpretation:
-        prompt = """You are the requirement interpreter for a university timetable planner. Turn a short, informal, typo-tolerant request into the requested JSON. Do not generate a timetable; a separate constraint solver does that after a person reviews your interpretation.
+        prompt = """You are a careful, conversational university timetable planning assistant. Understand informal, typo-tolerant requests and the conversation context, then return the requested JSON. Do not generate a timetable; a separate constraint solver does that after a person reviews your interpretation.
 
 Interpret the whole request, not only exact phrases. Resolve common abbreviations, spelling mistakes, weekday names, AM/PM times, ranges, and names against the supplied catalog. Use only catalog IDs. If a name or abbreviation matches more than one catalog item, ask one concise clarification question instead of guessing. Preserve the user's original wording verbatim in original_text. The catalog may include two shift windows, each section's fixed shift_id, and each time slot's shift_ids. Never move a section between shifts through a scheduling request. Consider only slots that belong to that section's configured shift. If a requested time conflicts with its shift, describe the conflict in unsupported_requirements or ask for clarification.
+
+When conversation history is present, use earlier user messages to resolve follow-up references such as "that section", "same teacher", "make it three times", or "avoid the other slot". Treat earlier assistant messages as context only, never as an approved schedule or a source of catalog facts. Interpret the latest user message as a refinement of the conversation, and return the complete set of still-applicable constraints from the conversation so far. If the follow-up conflicts with an earlier instruction, prefer the latest instruction and ask a concise clarification only when the intended schedule is still ambiguous. Do not invent missing catalog items or silently discard a prior constraint.
 
 Supported timetable changes:
 - Match each subject and section to one unique catalog item. A request may mention multiple subject-section pairs; return one change per pair.

@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -37,7 +38,11 @@ public class RequirementController {
     public Map<String, Object> parse(@AuthenticationPrincipal AppPrincipal principal, @Valid @RequestBody ParseRequest request) {
         roles.require(principal, "SUPER_ADMIN", "DEPARTMENT_ADMIN", "TIMETABLE_INCHARGE");
         Map<String, Object> problem = inputs.load(principal, request.termId());
-        Map<String, Object> interpretation = ai.post("/api/v1/requirements/parse", Map.of("text", request.text(), "catalog", inputs.catalog(problem)));
+        Map<String, Object> aiRequest = new LinkedHashMap<>();
+        aiRequest.put("text", request.text());
+        aiRequest.put("catalog", inputs.catalog(problem));
+        aiRequest.put("conversation", request.conversation() == null ? List.of() : request.conversation());
+        Map<String, Object> interpretation = ai.post("/api/v1/requirements/parse", aiRequest);
         if (!asList(interpretation.get("clarification_questions")).isEmpty()) interpretation.put("requires_review", true);
         String id = UUID.randomUUID().toString().replace("-", "");
         Map<String, Object> stored = new LinkedHashMap<>(interpretation);
@@ -80,6 +85,10 @@ public class RequirementController {
 
     private java.util.List<?> asList(Object value) { return value instanceof java.util.List<?> list ? list : java.util.List.of(); }
 
-    public record ParseRequest(@NotBlank @Size(max = 4000) String text, @NotBlank @Size(max = 128) String termId) {}
+    public record ConversationTurn(@NotBlank @jakarta.validation.constraints.Pattern(regexp = "user|assistant") String role,
+                                   @NotBlank @Size(max = 4000) String content) {}
+    public record ParseRequest(@NotBlank @Size(max = 4000) String text,
+                               @NotBlank @Size(max = 128) String termId,
+                               @Size(max = 20) List<@Valid ConversationTurn> conversation) {}
     public record PolicyQuestion(@NotBlank @Size(max = 1000) String question) {}
 }

@@ -1,6 +1,7 @@
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+  forward-headers-strategy: framework
 spring:
   application:
     name: riven-timetable-api
@@ -18,3 +19,5 @@ app:
     api-key: ${AI_SERVICE_API_KEY:}
   cors:
     allowed-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
+  calendar:
+    public-base-url: ${CALENDAR_PUBLIC_BASE_URL:}

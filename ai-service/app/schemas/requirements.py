@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -73,9 +75,15 @@ class RequirementInterpretation(StrictModel):
     requires_review: bool = True
 
 
+class ConversationTurn(StrictModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
 class ParseRequirementRequest(StrictModel):
     text: str = Field(min_length=4, max_length=4000)
     catalog: RequirementCatalog
+    conversation: list[ConversationTurn] = Field(default_factory=list, max_length=20)
 
 
 def validate_catalog_references(result: RequirementInterpretation, catalog: RequirementCatalog) -> RequirementInterpretation:

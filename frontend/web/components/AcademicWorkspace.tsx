@@ -7,7 +7,7 @@ import { backendRequest } from "../lib/backend";
 import styles from "./AcademicWorkspace.module.css";
 
 type CollectionKey = "departments" | "academicTerms" | "faculty" | "subjects" | "sections" | "rooms";
-type Field = { key: string; label: string; hint?: string; type?: "text" | "number" | "email" | "tel" | "checkbox" | "select"; options?: { value: string; label: string }[]; required?: boolean };
+type Field = { key: string; label: string; hint?: string; type?: "text" | "number" | "email" | "tel" | "checkbox" | "select" | "textarea"; options?: { value: string; label: string }[]; required?: boolean };
 type Resource = { title: string; description: string; singular: string; fields: Field[] };
 type AcademicRecord = Record<string, unknown> & { id: string; name: string };
 type ShiftConfig = { id: string; name: string; start_time: string; end_time: string };
@@ -59,8 +59,8 @@ const resources: Record<CollectionKey, Resource> = {
   faculty: { title: "Faculty", singular: "faculty member", description: "Track qualified subjects, weekly teaching limits, and availability.", fields: [
     { key: "name", label: "Full name", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or initials" }, { key: "department_id", label: "Department ID", required: true }, { key: "cabin_no", label: "Teacher cabin number", hint: "For example: AB1 208" }, { key: "mobile_number", label: "Mobile number", type: "tel", required: true }, { key: "college_email", label: "College email", type: "email", required: true }, { key: "personal_email", label: "Personal email (optional)", type: "email" }, { key: "max_weekly_periods", label: "Maximum weekly periods", type: "number", required: true }, { key: "qualified_subject_ids", label: "Qualified subject IDs", hint: "Comma-separated IDs" }, { key: "unavailable_slot_ids", label: "Unavailable slot IDs", hint: "Comma-separated IDs" }, { key: "preferred_slot_ids", label: "Preferred slot IDs", hint: "Comma-separated IDs" }, { key: "active", label: "Active faculty", type: "checkbox" },
   ] },
-  subjects: { title: "Subjects", singular: "subject", description: "Set course identifiers, workload requirements, and room constraints.", fields: [
-    { key: "name", label: "Subject name", required: true }, { key: "code", label: "Subject code", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or abbreviations" }, { key: "department_id", label: "Department ID", required: true }, { key: "term_id", label: "Academic term ID" }, { key: "faculty_ids", label: "Eligible faculty IDs", hint: "Comma-separated IDs" }, { key: "sessions_per_week", label: "Sessions per week", type: "number" }, { key: "periods_per_session", label: "Duration (1-hour periods)", hint: "1 = 1-hour lecture; 2 = 2-hour lab. Editable per subject.", type: "number" }, { key: "room_type", label: "Required room type", hint: "CLASSROOM or LAB" }, { key: "required_equipment", label: "Required equipment", hint: "Comma-separated values" },
+  subjects: { title: "Subjects", singular: "subject", description: "Set course identifiers, syllabus details, workload requirements, and room constraints.", fields: [
+    { key: "name", label: "Subject name", required: true }, { key: "code", label: "Subject code", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or abbreviations" }, { key: "department_id", label: "Department ID", required: true }, { key: "term_id", label: "Academic term ID" }, { key: "faculty_ids", label: "Eligible faculty IDs", hint: "Comma-separated IDs" }, { key: "sessions_per_week", label: "Sessions per week", type: "number" }, { key: "periods_per_session", label: "Duration (1-hour periods)", hint: "1 = 1-hour lecture; 2 = 2-hour lab. Editable per subject.", type: "number" }, { key: "room_type", label: "Required room type", hint: "CLASSROOM or LAB" }, { key: "required_equipment", label: "Required equipment", hint: "Comma-separated values" }, { key: "description", label: "Course description", type: "textarea" }, { key: "syllabus", label: "Syllabus / units", hint: "Use one topic or unit per line.", type: "textarea" }, { key: "syllabus_url", label: "Syllabus document URL", hint: "Optional HTTPS link" },
   ] },
   sections: { title: "Sections", singular: "section", description: "Define student cohorts, sizes, and academic grouping.", fields: [
     { key: "name", label: "Section name", required: true }, { key: "code", label: "Section code", required: true }, { key: "aliases", label: "Other names", hint: "Comma-separated names or abbreviations" }, { key: "department_id", label: "Department ID", required: true }, { key: "student_count", label: "Student count", type: "number", required: true }, { key: "shift_id", label: "College shift", type: "select", required: true, options: [{ value: "shift-1", label: "Shift 1" }, { value: "shift-2", label: "Shift 2" }] }, { key: "academic_year", label: "Academic year" }, { key: "term_id", label: "Academic term ID" },
@@ -72,7 +72,7 @@ const resources: Record<CollectionKey, Resource> = {
 
 const emptyForm = (resource: Resource) => Object.fromEntries(resource.fields.map((field) => [field.key, field.type === "checkbox" ? false : ""])) as Record<string, string | boolean>;
 const slug = (value: string) => value.trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
-const arrayFields = new Set(["aliases", "qualified_subject_ids", "faculty_ids", "unavailable_slot_ids", "preferred_slot_ids", "required_equipment", "equipment"]);
+const arrayFields = new Set(["aliases", "qualified_subject_ids", "faculty_ids", "unavailable_slot_ids", "preferred_slot_ids", "required_equipment", "equipment", "units"]);
 const numberFields = new Set(["max_weekly_periods", "sessions_per_week", "periods_per_session", "student_count", "capacity"]);
 
 function recordSummary(collection: CollectionKey, record: AcademicRecord) {
@@ -157,7 +157,7 @@ export default function AcademicWorkspace({ user, role, onSaved }: { user: User;
     const next = emptyForm(resource);
     for (const field of resource.fields) {
       const value = field.key === "college_email" ? record.college_email || record.email : record[field.key];
-      if (Array.isArray(value)) next[field.key] = value.join(", ");
+      if (Array.isArray(value)) next[field.key] = value.join(field.key === "units" ? "\n" : ", ");
       else if (typeof value === "boolean") next[field.key] = value;
       else if (value != null) next[field.key] = String(value);
     }
@@ -174,7 +174,7 @@ export default function AcademicWorkspace({ user, role, onSaved }: { user: User;
     for (const field of resource.fields) {
       const value = form[field.key];
       if (field.type === "checkbox") body[field.key] = Boolean(value);
-      else if (arrayFields.has(field.key)) body[field.key] = String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+      else if (arrayFields.has(field.key)) body[field.key] = String(value || "").split(field.key === "units" ? /\r?\n|,/ : ",").map((item) => item.trim()).filter(Boolean);
       else if (numberFields.has(field.key)) body[field.key] = String(value || "").trim() === "" ? undefined : Number(value);
       else if (String(value ?? "").trim()) body[field.key] = String(value).trim();
     }
@@ -226,7 +226,7 @@ export default function AcademicWorkspace({ user, role, onSaved }: { user: User;
       </div>
       {canWriteCollection && <form className={styles.formPane} onSubmit={save}>
         <div className={styles.formHeading}><div><h3>{editing ? `Edit ${resource.singular}` : `Add ${resource.singular}`}</h3><p>{editing ? `Record ID: ${recordId}` : "New records are stored in your institution’s Realtime Database."}</p></div>{editing && <button type="button" onClick={startNew} className={styles.cancel}>Cancel</button>}</div>
-        <div className={styles.fields}>{resource.fields.map((field) => field.type === "checkbox" ? <label className={styles.checkbox} key={field.key}><input type="checkbox" checked={Boolean(form[field.key])} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.checked }))} /><span>{field.label}</span></label> : <label className={styles.field} key={field.key}><span>{field.label}{field.required && <i> *</i>}</span>{field.type === "select" ? <select required={field.required} value={String(form[field.key] || "")} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.value }))}><option value="">Choose a shift</option>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input type={field.type || "text"} required={field.required} min={field.type === "number" ? 1 : undefined} readOnly={role === "DEPARTMENT_ADMIN" && field.key === "department_id"} value={String(form[field.key] || "")} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.value }))} placeholder={field.hint || "Enter a value"} />}</label>)}</div>
+        <div className={styles.fields}>{resource.fields.map((field) => field.type === "checkbox" ? <label className={styles.checkbox} key={field.key}><input type="checkbox" checked={Boolean(form[field.key])} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.checked }))} /><span>{field.label}</span></label> : <label className={`${styles.field} ${field.type === "textarea" ? styles.wideField : ""}`} key={field.key}><span>{field.label}{field.required && <i> *</i>}</span>{field.type === "select" ? <select required={field.required} value={String(form[field.key] || "")} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.value }))}><option value="">Choose a shift</option>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : field.type === "textarea" ? <textarea rows={field.key === "description" ? 3 : 6} readOnly={role === "DEPARTMENT_ADMIN" && field.key === "department_id"} value={String(form[field.key] || "")} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.value }))} placeholder={field.hint || "Enter a value"} /> : <input type={field.type || "text"} required={field.required} min={field.type === "number" ? 1 : undefined} readOnly={role === "DEPARTMENT_ADMIN" && field.key === "department_id"} value={String(form[field.key] || "")} onChange={(event) => setForm((previous) => ({ ...previous, [field.key]: event.target.value }))} placeholder={field.hint || "Enter a value"} />}</label>)}</div>
         <div className={styles.formFooter}><p>ID is generated from the code, or from the name if no code is provided.</p><button type="submit" disabled={saving}>{saving ? "Saving…" : editing ? "Save changes" : `Add ${resource.singular}`}</button></div>
       </form>}
     </div>
