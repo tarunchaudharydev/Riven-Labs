@@ -35,7 +35,7 @@ function hourlySlots(shifts: ShiftConfig[]) {
       const start_time = `${String(hour).padStart(2, "0")}:00`;
       const end_time = `${String(hour + 1).padStart(2, "0")}:00`;
       slots.push({
-        id: `${day.toLowerCase()}-${start_time.replace(":", "")}`,
+        id: `${day.toLowerCase()}-${hour - first + 1}`,
         day,
         period: hour - first + 1,
         label: `${assigned.map((shift) => shift.name).join(" & ")} · ${start_time}–${end_time}`,
@@ -285,7 +285,7 @@ function SchedulingInputEditor({ user, writable }: { user: User; writable: boole
   function buildInputs() {
     const values = (key: string) => Object.values(catalog[key] || {});
     const sectionRecords = values("sections").filter((row) => !row.term_id || row.term_id === termId);
-    const sections = sectionRecords.map((row) => ({ id: row.id, name: row.name, code: row.code || "", aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", student_count: Number(row.student_count || 0), shift_id: row.shift_id || shifts[0]?.id || DEFAULT_SHIFTS[0].id }));
+    const sections = sectionRecords.map((row) => ({ id: row.id, name: row.name, code: row.code || "", aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", student_count: Number(row.student_count || 0), shift_id: row.shift_id || "" }));
     const faculty = values("faculty").map((row) => ({ id: row.id, name: row.name, aliases: Array.isArray(row.aliases) ? row.aliases : [], department_id: row.department_id || "", department_name: row.department_name || "", department_code: row.department_code || "", department_block_no: row.department_block_no || "", qualified_subject_ids: Array.isArray(row.qualified_subject_ids) ? row.qualified_subject_ids.filter((id): id is string => typeof id === "string") : [], unavailable_slot_ids: row.unavailable_slot_ids || [], preferred_slot_ids: row.preferred_slot_ids || [], max_weekly_periods: Number(row.max_weekly_periods || 18), active: row.active !== false }));
     const rooms = values("rooms").map((row) => ({ id: row.id, name: row.name, code: row.code || "", capacity: Number(row.capacity || 0), room_type: row.room_type || "CLASSROOM", equipment: row.equipment || [], unavailable_slot_ids: row.unavailable_slot_ids || [] }));
     const subjects = values("subjects").filter((row) => !row.term_id || row.term_id === termId);
@@ -298,7 +298,10 @@ function SchedulingInputEditor({ user, writable }: { user: User; writable: boole
     try { time_slots = hourlySlots(shifts); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Check the shift time ranges."); return; }
     setJson(JSON.stringify({ shifts, time_slots, sections, faculty, rooms, requirements }, null, 2));
-    setNotice("Built one-hour slots across both shifts. Overlapping hours share the same clock slots, so a teacher or room cannot be double-booked between shifts. Labs use two consecutive hours by default.");
+    const missingShift = sectionRecords.some((row) => !row.shift_id);
+    setNotice(missingShift
+      ? "Some sections do not have a shift yet. Set Shift 1 or Shift 2 in Academic data → Sections, then rebuild before saving."
+      : "Built one-hour slots across both shifts. Overlapping hours share the same clock slots, so a teacher or room cannot be double-booked between shifts. Labs use two consecutive hours by default.");
     setError("");
   }
 
@@ -314,11 +317,14 @@ function SchedulingInputEditor({ user, writable }: { user: User; writable: boole
       const time_slots = hourlySlots(shifts);
       const sections = Array.isArray(existing.sections)
         ? existing.sections.map((section) => section && typeof section === "object"
-            ? { ...(section as Record<string, unknown>), shift_id: (section as Record<string, unknown>).shift_id || shifts[0].id }
+            ? { ...(section as Record<string, unknown>), shift_id: (section as Record<string, unknown>).shift_id || "" }
             : section)
         : existing.sections;
       setJson(JSON.stringify({ ...existing, shifts, time_slots, ...(sections ? { sections } : {}) }, null, 2));
-      setNotice("Updated the JSON with the two configured shifts and shared hourly slots.");
+      const missingShift = Array.isArray(sections) && sections.some((section) => section && typeof section === "object" && !(section as Record<string, unknown>).shift_id);
+      setNotice(missingShift
+        ? "Updated the hourly slots. Assign Shift 1 or Shift 2 to every section in the JSON (or Academic data → Sections) before saving."
+        : "Updated the JSON with the two configured shifts and shared hourly slots.");
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Check the shift time ranges."); }
   }
