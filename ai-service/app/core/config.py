@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.8-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     ai_service_api_key: str | None = None
     cors_origins: str = "http://localhost:3000"
     solver_time_limit_seconds: float = 15.0
