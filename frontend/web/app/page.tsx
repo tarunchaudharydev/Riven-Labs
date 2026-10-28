@@ -207,6 +207,7 @@ export default function Home() {
   const activeSchedule = publishedSchedules[0];
   const activeEntries = [...list(activeSchedule?.entries)].sort((a, b) => dayIndex(a.day) - dayIndex(b.day) || a.period - b.period);
   const terms = data?.terms ? Object.entries(data.terms) : [];
+  const roomFinderTerm = activeSchedule?.termId || terms.find(([, term]) => term.status === "ACTIVE")?.[0] || terms[0]?.[0] || "";
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setSigningIn(true); setAuthError("");
@@ -328,7 +329,7 @@ export default function Home() {
 
         <div className="content-grid">
           <section className="panel schedule-panel" id="timetable"><div className="panel-heading"><div><p className="eyebrow">LIVE SCHEDULE</p><h3>{data?.role === "FACULTY" ? "My mapped classes" : "Published timetable"}</h3></div>{activeSchedule && <span className="status-badge published"><i />Published</span>}</div>
-            {activeSchedule ? <><p className="panel-note">{data?.role === "FACULTY" ? "My assigned classes · Academic term" : "Academic term"} <strong>{activeSchedule.termId}</strong> · {activeEntries.length} scheduled sessions</p><TimetableBoard entries={activeEntries} termId={activeSchedule.termId} role={data?.role || ""} canRecommend={canManageCoverage || data?.role === "FACULTY"} canAssign={canManageCoverage} busy={busy} substitutions={substitutions} onReportAbsence={reportAbsence} onAssignSubstitute={assignSubstitute} /><RoomAvailabilityFinder user={user} termId={activeSchedule.termId} /></> : <EmptyState icon="calendar" title="No published timetable yet" body="Once a reviewed draft is approved and published, the active schedule will appear here." />}
+            {activeSchedule ? <><p className="panel-note">{data?.role === "FACULTY" ? "My assigned classes · Academic term" : "Academic term"} <strong>{activeSchedule.termId}</strong> · {activeEntries.length} scheduled sessions</p><TimetableBoard entries={activeEntries} termId={activeSchedule.termId} role={data?.role || ""} canRecommend={canManageCoverage || data?.role === "FACULTY"} canAssign={canManageCoverage} busy={busy} substitutions={substitutions} onReportAbsence={reportAbsence} onAssignSubstitute={assignSubstitute} /></> : <EmptyState icon="calendar" title="No published timetable yet" body="Once a reviewed draft is approved and published, the active schedule will appear here." />}{roomFinderTerm && <RoomAvailabilityFinder user={user} termId={roomFinderTerm} />}
           </section>
 
           {canSchedule && <section className="panel assistant-panel" id="assistant"><div className="panel-heading"><div><p className="eyebrow">CONSTRAINT-BASED PLANNING</p><h3>Timetable copilot</h3></div><span className="ai-badge"><Icon name="spark" size={14} /> AI + CP-SAT</span></div><p className="assistant-intro">Describe what needs to be scheduled. AI translates it into a reviewable request; the solver checks hard constraints.</p>
